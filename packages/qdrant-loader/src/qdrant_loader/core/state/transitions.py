@@ -175,109 +175,163 @@ async def update_document_state(
     project_id: str | None,
 ) -> DocumentStateRecord:
     async with session_factory() as session:  # type: ignore
-        query = select(DocumentStateRecord).filter(
-            DocumentStateRecord.source_type == document.source_type,
-            DocumentStateRecord.source == document.source,
-            DocumentStateRecord.document_id == document.id,
+        document_state_record = await _apply_document_state_update(
+            session, document=document, project_id=project_id
         )
-        if project_id is not None:
-            query = query.filter(DocumentStateRecord.project_id == project_id)
-        result = await session.execute(query)
-        document_state_record = result.scalar_one_or_none()
-
-        now = datetime.now(UTC)
-
-        metadata = document.metadata
-        conversion_method = metadata.get("conversion_method")
-        is_converted = conversion_method is not None
-        conversion_failed = metadata.get("conversion_failed", False)
-
-        is_attachment = metadata.get("is_attachment", False)
-        parent_document_id = metadata.get("parent_document_id")
-        attachment_id = metadata.get("attachment_id")
-
-        if document_state_record:
-            document_state_record.title = document.title  # type: ignore
-            document_state_record.content_hash = document.content_hash  # type: ignore
-            document_state_record.is_deleted = False  # type: ignore
-            document_state_record.updated_at = now  # type: ignore
-
-            document_state_record.is_converted = is_converted  # type: ignore
-            document_state_record.conversion_method = conversion_method  # type: ignore
-            document_state_record.original_file_type = metadata.get("original_file_type")  # type: ignore
-            document_state_record.original_filename = metadata.get("original_filename")  # type: ignore
-            document_state_record.file_size = metadata.get("file_size")  # type: ignore
-            document_state_record.conversion_failed = conversion_failed  # type: ignore
-            document_state_record.conversion_error = metadata.get("conversion_error")  # type: ignore
-            document_state_record.conversion_time = metadata.get("conversion_time")  # type: ignore
-
-            document_state_record.is_attachment = is_attachment  # type: ignore
-            document_state_record.parent_document_id = parent_document_id  # type: ignore
-            document_state_record.attachment_id = attachment_id  # type: ignore
-            document_state_record.attachment_filename = metadata.get("attachment_filename")  # type: ignore
-            document_state_record.attachment_mime_type = metadata.get("attachment_mime_type")  # type: ignore
-            document_state_record.attachment_download_url = metadata.get("attachment_download_url")  # type: ignore
-            document_state_record.attachment_author = metadata.get("attachment_author")  # type: ignore
-
-            attachment_created_str = metadata.get("attachment_created_at")
-            if attachment_created_str:
-                try:
-                    if isinstance(attachment_created_str, str):
-                        document_state_record.attachment_created_at = (
-                            datetime.fromisoformat(
-                                attachment_created_str.replace("Z", "+00:00")
-                            )
-                        )  # type: ignore
-                    elif isinstance(attachment_created_str, datetime):
-                        document_state_record.attachment_created_at = attachment_created_str  # type: ignore
-                except (ValueError, TypeError):
-                    document_state_record.attachment_created_at = None  # type: ignore
-        else:
-            attachment_created_at = None
-            attachment_created_str = metadata.get("attachment_created_at")
-            if attachment_created_str:
-                try:
-                    if isinstance(attachment_created_str, str):
-                        attachment_created_at = datetime.fromisoformat(
-                            attachment_created_str.replace("Z", "+00:00")
-                        )
-                    elif isinstance(attachment_created_str, datetime):
-                        attachment_created_at = attachment_created_str
-                except (ValueError, TypeError):
-                    attachment_created_at = None
-
-            document_state_record = DocumentStateRecord(
-                project_id=project_id,
-                document_id=document.id,
-                source_type=document.source_type,
-                source=document.source,
-                url=document.url,
-                title=document.title,
-                content_hash=document.content_hash,
-                is_deleted=False,
-                created_at=now,
-                updated_at=now,
-                is_converted=is_converted,
-                conversion_method=conversion_method,
-                original_file_type=metadata.get("original_file_type"),
-                original_filename=metadata.get("original_filename"),
-                file_size=metadata.get("file_size"),
-                conversion_failed=conversion_failed,
-                conversion_error=metadata.get("conversion_error"),
-                conversion_time=metadata.get("conversion_time"),
-                is_attachment=is_attachment,
-                parent_document_id=parent_document_id,
-                attachment_id=attachment_id,
-                attachment_filename=metadata.get("attachment_filename"),
-                attachment_mime_type=metadata.get("attachment_mime_type"),
-                attachment_download_url=metadata.get("attachment_download_url"),
-                attachment_author=metadata.get("attachment_author"),
-                attachment_created_at=attachment_created_at,
-            )
-            session.add(document_state_record)
-
         await session.commit()
         return document_state_record
+
+
+async def update_document_states_batch(
+    session_factory: AsyncSessionFactory,
+    *,
+    documents: list[Document],
+    project_id: str | None,
+) -> list[tuple[Document, DocumentStateRecord | None, Exception | None]]:
+    """Update state for multiple documents in a single session and commit.
+
+    Each document's read+write is wrapped in its own SAVEPOINT
+    (``session.begin_nested()``), so a failure on one document rolls back
+    only that document's changes -- the rest of the batch still lands in the
+    single, final ``commit()``. This turns N sequential fsync'd transactions
+    (the previous per-document behavior) into one, while preserving the
+    per-document error isolation callers rely on.
+
+    Returns a list of ``(document, record_or_None, exception_or_None)``
+    aligned with ``documents``, so callers can log per-document
+    success/failure exactly as before.
+    """
+    results: list[tuple[Document, DocumentStateRecord | None, Exception | None]] = []
+    async with session_factory() as session:  # type: ignore
+        for document in documents:
+            try:
+                async with session.begin_nested():
+                    record = await _apply_document_state_update(
+                        session, document=document, project_id=project_id
+                    )
+                results.append((document, record, None))
+            except Exception as e:  # noqa: BLE001 - reported to caller, not swallowed
+                results.append((document, None, e))
+
+        await session.commit()
+
+    return results
+
+
+async def _apply_document_state_update(
+    session: Any,
+    *,
+    document: Document,
+    project_id: str | None,
+) -> DocumentStateRecord:
+    """Fetch (if present) and update/create a document's state record.
+
+    Operates within the caller's session/transaction and does not commit --
+    callers own the commit boundary so single- and batch-update paths can
+    share this logic while controlling transaction granularity themselves.
+    """
+    query = select(DocumentStateRecord).filter(
+        DocumentStateRecord.source_type == document.source_type,
+        DocumentStateRecord.source == document.source,
+        DocumentStateRecord.document_id == document.id,
+    )
+    if project_id is not None:
+        query = query.filter(DocumentStateRecord.project_id == project_id)
+    result = await session.execute(query)
+    document_state_record = result.scalar_one_or_none()
+
+    now = datetime.now(UTC)
+
+    metadata = document.metadata
+    conversion_method = metadata.get("conversion_method")
+    is_converted = conversion_method is not None
+    conversion_failed = metadata.get("conversion_failed", False)
+
+    is_attachment = metadata.get("is_attachment", False)
+    parent_document_id = metadata.get("parent_document_id")
+    attachment_id = metadata.get("attachment_id")
+
+    if document_state_record:
+        document_state_record.title = document.title  # type: ignore
+        document_state_record.content_hash = document.content_hash  # type: ignore
+        document_state_record.is_deleted = False  # type: ignore
+        document_state_record.updated_at = now  # type: ignore
+
+        document_state_record.is_converted = is_converted  # type: ignore
+        document_state_record.conversion_method = conversion_method  # type: ignore
+        document_state_record.original_file_type = metadata.get("original_file_type")  # type: ignore
+        document_state_record.original_filename = metadata.get("original_filename")  # type: ignore
+        document_state_record.file_size = metadata.get("file_size")  # type: ignore
+        document_state_record.conversion_failed = conversion_failed  # type: ignore
+        document_state_record.conversion_error = metadata.get("conversion_error")  # type: ignore
+        document_state_record.conversion_time = metadata.get("conversion_time")  # type: ignore
+
+        document_state_record.is_attachment = is_attachment  # type: ignore
+        document_state_record.parent_document_id = parent_document_id  # type: ignore
+        document_state_record.attachment_id = attachment_id  # type: ignore
+        document_state_record.attachment_filename = metadata.get("attachment_filename")  # type: ignore
+        document_state_record.attachment_mime_type = metadata.get("attachment_mime_type")  # type: ignore
+        document_state_record.attachment_download_url = metadata.get("attachment_download_url")  # type: ignore
+        document_state_record.attachment_author = metadata.get("attachment_author")  # type: ignore
+
+        attachment_created_str = metadata.get("attachment_created_at")
+        if attachment_created_str:
+            try:
+                if isinstance(attachment_created_str, str):
+                    document_state_record.attachment_created_at = (
+                        datetime.fromisoformat(
+                            attachment_created_str.replace("Z", "+00:00")
+                        )
+                    )  # type: ignore
+                elif isinstance(attachment_created_str, datetime):
+                    document_state_record.attachment_created_at = attachment_created_str  # type: ignore
+            except (ValueError, TypeError):
+                document_state_record.attachment_created_at = None  # type: ignore
+    else:
+        attachment_created_at = None
+        attachment_created_str = metadata.get("attachment_created_at")
+        if attachment_created_str:
+            try:
+                if isinstance(attachment_created_str, str):
+                    attachment_created_at = datetime.fromisoformat(
+                        attachment_created_str.replace("Z", "+00:00")
+                    )
+                elif isinstance(attachment_created_str, datetime):
+                    attachment_created_at = attachment_created_str
+            except (ValueError, TypeError):
+                attachment_created_at = None
+
+        document_state_record = DocumentStateRecord(
+            project_id=project_id,
+            document_id=document.id,
+            source_type=document.source_type,
+            source=document.source,
+            url=document.url,
+            title=document.title,
+            content_hash=document.content_hash,
+            is_deleted=False,
+            created_at=now,
+            updated_at=now,
+            is_converted=is_converted,
+            conversion_method=conversion_method,
+            original_file_type=metadata.get("original_file_type"),
+            original_filename=metadata.get("original_filename"),
+            file_size=metadata.get("file_size"),
+            conversion_failed=conversion_failed,
+            conversion_error=metadata.get("conversion_error"),
+            conversion_time=metadata.get("conversion_time"),
+            is_attachment=is_attachment,
+            parent_document_id=parent_document_id,
+            attachment_id=attachment_id,
+            attachment_filename=metadata.get("attachment_filename"),
+            attachment_mime_type=metadata.get("attachment_mime_type"),
+            attachment_download_url=metadata.get("attachment_download_url"),
+            attachment_author=metadata.get("attachment_author"),
+            attachment_created_at=attachment_created_at,
+        )
+        session.add(document_state_record)
+
+    return document_state_record
 
 
 async def update_conversion_metrics(

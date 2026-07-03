@@ -743,6 +743,9 @@ class TestPipelineOrchestrator:
 
         # Setup state manager
         self.state_manager._initialized = False
+        self.state_manager.update_document_states_batch.side_effect = (
+            lambda docs, project_id: [(doc, Mock(), None) for doc in docs]
+        )
 
         # Execute
         await self.orchestrator._update_document_states(
@@ -751,12 +754,9 @@ class TestPipelineOrchestrator:
 
         # Verify
         self.state_manager.initialize.assert_called_once()
-        # Should update states for doc1 and doc3 only
-        assert self.state_manager.update_document_state.call_count == 2
-        updated_docs = [
-            call.args[0]
-            for call in self.state_manager.update_document_state.call_args_list
-        ]
+        # Should update states for doc1 and doc3 only, in a single batch call
+        self.state_manager.update_document_states_batch.assert_called_once()
+        updated_docs = self.state_manager.update_document_states_batch.call_args.args[0]
         updated_doc_ids = {doc.id for doc in updated_docs}
         assert updated_doc_ids == {"doc1", "doc3"}
 
@@ -768,14 +768,17 @@ class TestPipelineOrchestrator:
 
         # Setup state manager as already initialized
         self.state_manager._initialized = True
+        self.state_manager.update_document_states_batch.side_effect = (
+            lambda docs, project_id: [(doc, Mock(), None) for doc in docs]
+        )
 
         # Execute
         await self.orchestrator._update_document_states(mock_documents, successfully_processed_doc_ids, None)  # type: ignore
 
         # Verify
         self.state_manager.initialize.assert_not_called()
-        self.state_manager.update_document_state.assert_called_once_with(
-            mock_documents[0], None
+        self.state_manager.update_document_states_batch.assert_called_once_with(
+            mock_documents, None
         )
 
     @pytest.mark.asyncio
@@ -790,17 +793,19 @@ class TestPipelineOrchestrator:
         # Setup state manager
         self.state_manager._initialized = True
 
-        # Configure one update to fail
-        self.state_manager.update_document_state.side_effect = [
-            None,  # Success for doc1
-            Exception("Update failed for doc2"),  # Failure for doc2
+        # Configure one document's update to fail within the batch
+        self.state_manager.update_document_states_batch.return_value = [
+            (mock_documents[0], Mock(), None),  # Success for doc1
+            (mock_documents[1], None, Exception("Update failed for doc2")),
         ]
 
         # Execute (should not raise exception)
         await self.orchestrator._update_document_states(mock_documents, successfully_processed_doc_ids, None)  # type: ignore
 
-        # Verify both updates were attempted
-        assert self.state_manager.update_document_state.call_count == 2
+        # Verify both documents were included in the single batch call
+        self.state_manager.update_document_states_batch.assert_called_once_with(
+            mock_documents, None
+        )
 
     @pytest.mark.asyncio
     async def test_update_document_states_empty_success_set(self):
@@ -814,8 +819,8 @@ class TestPipelineOrchestrator:
         # Execute
         await self.orchestrator._update_document_states(mock_documents, successfully_processed_doc_ids, None)  # type: ignore
 
-        # Verify no updates were attempted (but initialization was called)
-        self.state_manager.update_document_state.assert_not_called()
+        # Verify no batch update was attempted (but initialization was called)
+        self.state_manager.update_document_states_batch.assert_not_called()
         self.state_manager.initialize.assert_called_once()
 
     @pytest.mark.asyncio

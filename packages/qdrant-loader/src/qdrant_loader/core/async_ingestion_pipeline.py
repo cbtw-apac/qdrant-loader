@@ -34,10 +34,10 @@ class AsyncIngestionPipeline:
         settings: Settings,
         qdrant_manager: QdrantManager,
         state_manager: StateManager | None = None,
-        max_chunk_workers: int = 10,
-        max_embed_workers: int = 4,
-        max_upsert_workers: int = 4,
-        queue_size: int = 1000,
+        max_chunk_workers: int | None = None,
+        max_embed_workers: int | None = None,
+        max_upsert_workers: int | None = None,
+        queue_size: int | None = None,
         upsert_batch_size: int | None = None,
         enable_metrics: bool = False,
         metrics_dir: Path | None = None,  # New parameter for workspace support
@@ -49,11 +49,16 @@ class AsyncIngestionPipeline:
             qdrant_manager: QdrantManager instance
             state_manager: Optional state manager
 
-            max_chunk_workers: Maximum number of chunking workers
-            max_embed_workers: Maximum number of embedding workers
-            max_upsert_workers: Maximum number of upsert workers
-            queue_size: Queue size for workers
-            upsert_batch_size: Batch size for upserts
+            max_chunk_workers: Maximum number of chunking workers. Defaults to
+                ``settings.global_config.concurrency.max_chunk_workers``.
+            max_embed_workers: Maximum number of embedding workers. Defaults to
+                ``settings.global_config.concurrency.max_embed_workers``.
+            max_upsert_workers: Maximum number of upsert workers. Defaults to
+                ``settings.global_config.concurrency.max_upsert_workers``.
+            queue_size: Queue size for workers. Defaults to
+                ``settings.global_config.concurrency.queue_size``.
+            upsert_batch_size: Batch size for upserts. Defaults to
+                ``settings.global_config.concurrency.upsert_batch_size``.
             enable_metrics: Whether to enable metrics server
             metrics_dir: Custom metrics directory (for workspace support)
         """
@@ -66,13 +71,32 @@ class AsyncIngestionPipeline:
                 "Global configuration not available. Please check your configuration file."
             )
 
-        # Create pipeline configuration with worker and batch size settings.
+        # Explicit constructor args win; otherwise fall back to the user's
+        # settings.yaml (global.concurrency), so these knobs are actually
+        # reachable from configuration instead of being stuck at a literal.
+        concurrency = settings.global_config.concurrency
         self.pipeline_config = PipelineConfig(
-            max_chunk_workers=max_chunk_workers,
-            max_embed_workers=max_embed_workers,
-            max_upsert_workers=max_upsert_workers,
-            queue_size=queue_size,
-            upsert_batch_size=upsert_batch_size,
+            max_chunk_workers=(
+                max_chunk_workers
+                if max_chunk_workers is not None
+                else concurrency.max_chunk_workers
+            ),
+            max_embed_workers=(
+                max_embed_workers
+                if max_embed_workers is not None
+                else concurrency.max_embed_workers
+            ),
+            max_upsert_workers=(
+                max_upsert_workers
+                if max_upsert_workers is not None
+                else concurrency.max_upsert_workers
+            ),
+            queue_size=queue_size if queue_size is not None else concurrency.queue_size,
+            upsert_batch_size=(
+                upsert_batch_size
+                if upsert_batch_size is not None
+                else concurrency.upsert_batch_size
+            ),
             enable_metrics=enable_metrics,
         )
 

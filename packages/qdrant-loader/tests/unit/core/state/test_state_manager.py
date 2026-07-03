@@ -154,6 +154,109 @@ async def test_update_document_state(state_manager, sample_document):
 
 
 @pytest.mark.asyncio
+async def test_update_document_states_batch_success(state_manager):
+    """A batch update commits all documents and returns their records."""
+    documents = [
+        Document(
+            id=f"batch-doc-{i}",
+            title=f"Doc {i}",
+            content=f"Content {i}",
+            content_type="text/plain",
+            source_type="test",
+            source="test-source",
+            url=f"http://test.com/doc{i}",
+            metadata={},
+        )
+        for i in range(3)
+    ]
+
+    results = await state_manager.update_document_states_batch(documents)
+
+    assert len(results) == 3
+    for doc, record, error in results:
+        assert error is None
+        assert record is not None
+        assert record.document_id == doc.id
+
+    for doc in documents:
+        stored = await state_manager.get_document_state_record(
+            source_type="test", source="test-source", document_id=doc.id
+        )
+        assert stored is not None
+
+
+@pytest.mark.asyncio
+async def test_update_document_states_batch_isolates_per_document_failure(
+    state_manager,
+):
+    """One document's failure must not prevent the others from being committed."""
+    documents = [
+        Document(
+            id="good-doc-1",
+            title="Good 1",
+            content="Content",
+            content_type="text/plain",
+            source_type="test",
+            source="test-source",
+            url="http://test.com/good1",
+            metadata={},
+        ),
+        Document(
+            id="bad-doc",
+            title="Bad",
+            content="Content",
+            content_type="text/plain",
+            source_type="test",
+            source="test-source",
+            url="http://test.com/bad",
+            metadata={},
+        ),
+        Document(
+            id="good-doc-2",
+            title="Good 2",
+            content="Content",
+            content_type="text/plain",
+            source_type="test",
+            source="test-source",
+            url="http://test.com/good2",
+            metadata={},
+        ),
+    ]
+
+    from qdrant_loader.core.state import transitions as _transitions
+
+    original_apply = _transitions._apply_document_state_update
+
+    async def failing_apply(session, *, document, project_id):
+        if document.id == "bad-doc":
+            raise RuntimeError("simulated failure")
+        return await original_apply(session, document=document, project_id=project_id)
+
+    with patch.object(
+        _transitions, "_apply_document_state_update", side_effect=failing_apply
+    ):
+        results = await state_manager.update_document_states_batch(documents)
+
+    results_by_id = {doc.id: error for doc, _record, error in results}
+    assert results_by_id["good-doc-1"] is None
+    assert results_by_id["bad-doc"] is not None
+    assert results_by_id["good-doc-2"] is None
+
+    good1 = await state_manager.get_document_state_record(
+        source_type="test", source="test-source", document_id="good-doc-1"
+    )
+    good2 = await state_manager.get_document_state_record(
+        source_type="test", source="test-source", document_id="good-doc-2"
+    )
+    bad = await state_manager.get_document_state_record(
+        source_type="test", source="test-source", document_id="bad-doc"
+    )
+    assert good1 is not None
+    assert good2 is not None
+    assert bad is None
+
+
+@pytest.mark.asyncio
 async def test_mark_document_deleted(state_manager, sample_document):
     """Test marking a document as deleted."""
     # First create the document state

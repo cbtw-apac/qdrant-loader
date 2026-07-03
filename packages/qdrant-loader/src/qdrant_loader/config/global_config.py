@@ -10,6 +10,7 @@ from pydantic import Field
 
 from qdrant_loader.config.base import BaseConfig
 from qdrant_loader.config.chunking import ChunkingConfig
+from qdrant_loader.config.concurrency import ConcurrencyConfig
 from qdrant_loader.config.embedding import EmbeddingConfig
 from qdrant_loader.config.graph import GraphConfig
 from qdrant_loader.config.qdrant import QdrantConfig
@@ -62,6 +63,10 @@ class GlobalConfig(BaseConfig):
         default_factory=WorkersConfig,
         description="Worker scheduling and runtime configuration",
     )
+    concurrency: ConcurrencyConfig = Field(
+        default_factory=ConcurrencyConfig,
+        description="Ingestion pipeline concurrency configuration (chunk/embed/upsert)",
+    )
     graph: GraphConfig = Field(
         default_factory=GraphConfig, description="Graph configuration"
     )
@@ -112,5 +117,6 @@ class GlobalConfig(BaseConfig):
             },
             "qdrant": self.qdrant.to_dict(),
             "workers": self.workers.to_dict(),
+            "concurrency": self.concurrency.to_dict(),
             "graph": self.graph.to_dict(),
         }

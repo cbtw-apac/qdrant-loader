@@ -38,3 +38,13 @@ class EmbeddingConfig(BaseConfig):
         default=8000,
         description="Maximum tokens allowed for a single chunk (should match or be below model's context limit)",
     )
+    min_request_interval: float = Field(
+        default=0.5,
+        ge=0,
+        description=(
+            "Minimum time in seconds between embedding API requests, enforced "
+            "across all concurrent embed workers. Guards against provider rate "
+            "limits (HTTP 429); lower or set to 0 for local/self-hosted models "
+            "or providers with generous rate limits."
+        ),
+    )

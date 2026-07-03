@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from qdrant_loader.config import Settings
+from qdrant_loader.config.concurrency import ConcurrencyConfig
 from qdrant_loader.core.async_ingestion_pipeline import AsyncIngestionPipeline
 from qdrant_loader.core.document import Document
 from qdrant_loader.core.qdrant_manager import QdrantManager
@@ -31,6 +32,9 @@ class TestAsyncIngestionPipeline:
         settings.global_config.state_management = Mock()
         settings.global_config.qdrant = Mock()
         settings.global_config.qdrant.collection_name = "test_collection"
+        # Real config object (not a Mock) so unset constructor args fall back
+        # to real default values instead of auto-generated Mock attributes.
+        settings.global_config.concurrency = ConcurrencyConfig()
         settings.projects_config = Mock()
         return settings
 
@@ -780,3 +784,71 @@ class TestAsyncIngestionPipeline:
             assert config.queue_size == 1000  # Default
             assert config.upsert_batch_size is None  # Default
             assert config.enable_metrics is False  # Default
+
+    def test_pipeline_config_sourced_from_settings_concurrency(
+        self, mock_settings, mock_qdrant_manager
+    ):
+        """Unset constructor args must fall back to settings.global_config.concurrency.
+
+        This is what makes max_embed_workers/max_upsert_workers actually
+        configurable via settings.yaml instead of being stuck at whatever
+        literal defaults AsyncIngestionPipeline.__init__ happens to declare.
+        """
+        mock_settings.global_config.concurrency = ConcurrencyConfig(
+            max_chunk_workers=20,
+            max_embed_workers=12,
+            max_upsert_workers=9,
+            queue_size=5000,
+            upsert_batch_size=333,
+        )
+
+        with (
+            patch(
+                "qdrant_loader.core.async_ingestion_pipeline.PipelineComponentsFactory"
+            ),
+            patch("qdrant_loader.core.async_ingestion_pipeline.PipelineOrchestrator"),
+            patch("qdrant_loader.core.async_ingestion_pipeline.ResourceManager"),
+            patch("qdrant_loader.core.async_ingestion_pipeline.IngestionMonitor"),
+            patch("qdrant_loader.core.async_ingestion_pipeline.prometheus_metrics"),
+            patch("qdrant_loader.core.async_ingestion_pipeline.Path"),
+        ):
+            pipeline = AsyncIngestionPipeline(
+                settings=mock_settings,
+                qdrant_manager=mock_qdrant_manager,
+            )
+
+            config = pipeline.pipeline_config
+            assert config.max_chunk_workers == 20
+            assert config.max_embed_workers == 12
+            assert config.max_upsert_workers == 9
+            assert config.queue_size == 5000
+            assert config.upsert_batch_size == 333
+
+    def test_pipeline_config_explicit_args_override_settings_concurrency(
+        self, mock_settings, mock_qdrant_manager
+    ):
+        """An explicitly passed constructor arg still wins over settings.yaml."""
+        mock_settings.global_config.concurrency = ConcurrencyConfig(
+            max_embed_workers=12,
+            max_upsert_workers=9,
+        )
+
+        with (
+            patch(
+                "qdrant_loader.core.async_ingestion_pipeline.PipelineComponentsFactory"
+            ),
+            patch("qdrant_loader.core.async_ingestion_pipeline.PipelineOrchestrator"),
+            patch("qdrant_loader.core.async_ingestion_pipeline.ResourceManager"),
+            patch("qdrant_loader.core.async_ingestion_pipeline.IngestionMonitor"),
+            patch("qdrant_loader.core.async_ingestion_pipeline.prometheus_metrics"),
+            patch("qdrant_loader.core.async_ingestion_pipeline.Path"),
+        ):
+            pipeline = AsyncIngestionPipeline(
+                settings=mock_settings,
+                qdrant_manager=mock_qdrant_manager,
+                max_embed_workers=2,
+            )
+
+            config = pipeline.pipeline_config
+            assert config.max_embed_workers == 2
+            assert config.max_upsert_workers == 9  # still sourced from settings

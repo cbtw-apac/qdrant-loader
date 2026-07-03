@@ -126,6 +126,12 @@ global:
     # OpenAI: "cl100k_base"
     max_tokens_per_request: 8000
     max_tokens_per_chunk: 8000
+    min_request_interval: 0.5
+    # Minimum seconds between embedding API requests, enforced across all
+    # concurrent embed workers (see concurrency.max_embed_workers below).
+    # Guards against provider rate limits (HTTP 429).
+    # Ollama/local models: safe to lower to 0
+    # OpenAI/hosted providers: raise if you see 429s, lower if you have headroom
 
   # Unified LLM configuration (provider-agnostic)
   # New preferred configuration block; legacy embedding/markitdown fields still work
@@ -288,6 +294,21 @@ global:
         enabled: false
         # Supports integer seconds or duration strings (e.g., 5s, 5m, 1h)
         interval: 5s
+
+  # Ingestion pipeline concurrency configuration
+  # Controls how many chunk/embed/upsert operations run in parallel during ingestion.
+  # Unrelated to `workers` above, which governs the job-scheduling queue.
+  concurrency:
+    # Maximum number of documents chunked concurrently
+    max_chunk_workers: 10
+    # Maximum number of embedding batch requests in flight concurrently
+    max_embed_workers: 4
+    # Maximum number of Qdrant upsert batch requests in flight concurrently
+    max_upsert_workers: 4
+    # Advisory queue size hint passed to pipeline workers
+    queue_size: 1000
+    # Chunks per Qdrant upsert batch; omit to default to the embedding batch size
+    # upsert_batch_size: 100
 
 # Multi-project configuration
 # Define multiple projects, each with their own sources and settings

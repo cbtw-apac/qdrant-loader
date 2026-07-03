@@ -17,6 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from ..utils.logging import LoggingConfig
 from ..utils.sensitive import sanitize_exception_message
 from .chunking import ChunkingConfig
+from .concurrency import ConcurrencyConfig
 
 # Import consolidated configs
 from .global_config import GlobalConfig, SemanticAnalysisConfig
@@ -65,6 +66,7 @@ def _get_connector_configs():
 
 __all__ = [
     "ChunkingConfig",
+    "ConcurrencyConfig",
     "ConfluenceSpaceConfig",
     "GitAuthConfig",
     "GitRepoConfig",

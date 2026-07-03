@@ -79,6 +79,23 @@ def setup_test_environment():
         shutil.rmtree(data_dir)
 
 
+@pytest.fixture(autouse=True)
+def _clear_spacy_model_cache():
+    """Clear the process-wide spaCy model cache before every test.
+
+    Many tests patch spacy.load / spacy_download and assert on call counts
+    or specific mock return values. Without resetting this cache, only the
+    first test to request a given (variant, model_name) key would ever call
+    the mock -- every later test would silently see that first test's cached
+    (mocked) model instead of its own.
+    """
+    from qdrant_loader.core.text_processing import spacy_model_cache
+
+    spacy_model_cache.clear()
+    yield
+    spacy_model_cache.clear()
+
+
 @pytest.fixture(scope="session")
 def test_settings():
     """Get test settings."""

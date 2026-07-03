@@ -154,7 +154,14 @@ async def _serve_main(
 
     logger.info("serve.pipeline_init")
     pipeline_factory = PipelineComponentsFactory()
-    pipeline_config = PipelineConfig()
+    concurrency = config_obj.concurrency
+    pipeline_config = PipelineConfig(
+        max_chunk_workers=concurrency.max_chunk_workers,
+        max_embed_workers=concurrency.max_embed_workers,
+        max_upsert_workers=concurrency.max_upsert_workers,
+        queue_size=concurrency.queue_size,
+        upsert_batch_size=concurrency.upsert_batch_size,
+    )
     pipeline_components = pipeline_factory.create_components(
         settings,
         pipeline_config,

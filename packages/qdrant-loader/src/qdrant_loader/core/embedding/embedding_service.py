@@ -52,7 +52,7 @@ class EmbeddingService:
                 self.encoding = None
 
         self.last_request_time = 0
-        self.min_request_interval = 0.5  # 500ms between requests
+        self.min_request_interval = settings.global_config.embedding.min_request_interval
 
         # Retry configuration for network resilience
         self.max_retries = 3

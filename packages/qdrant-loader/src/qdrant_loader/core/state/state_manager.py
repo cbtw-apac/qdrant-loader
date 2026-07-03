@@ -465,6 +465,30 @@ class StateManager:
             )
             raise
 
+    async def update_document_states_batch(
+        self, documents: list[Document], project_id: str | None = None
+    ) -> list[tuple[Document, DocumentStateRecord | None, Exception | None]]:
+        """Update state for multiple documents in one session/commit.
+
+        Unlike calling ``update_document_state`` once per document, this
+        commits once for the whole batch (each document's write is isolated
+        by its own SAVEPOINT, so one failure doesn't affect the others).
+        Returns per-document ``(document, record_or_None, exception_or_None)``
+        so callers can report success/failure exactly as before.
+        """
+        if not self._initialized:
+            raise RuntimeError("StateManager not initialized. Call initialize() first.")
+
+        self.logger.debug(
+            f"Updating document state for {len(documents)} documents in one batch "
+            f"(project: {project_id})"
+        )
+        return await _transitions.update_document_states_batch(
+            self._session_factory,  # type: ignore[arg-type]
+            documents=documents,
+            project_id=project_id,
+        )
+
     async def update_conversion_metrics(
         self,
         source_type: str,

@@ -858,14 +858,20 @@ class PipelineOrchestrator:
             logger.debug("Initializing state manager for document state updates")
             await self.components.state_manager.initialize()
 
-        for doc in successfully_processed_docs:
-            try:
-                await self.components.state_manager.update_document_state(
-                    doc, project_id
-                )
+        if not successfully_processed_docs:
+            return
+
+        # One session/commit for the whole batch instead of one per document
+        # (each document's write is still isolated via a SAVEPOINT, so a
+        # single failure doesn't affect the others' results below).
+        results = await self.components.state_manager.update_document_states_batch(
+            successfully_processed_docs, project_id
+        )
+        for doc, _record, error in results:
+            if error is None:
                 logger.debug(f"Updated document state for {doc.id}")
-            except Exception as e:
+            else:
                 logger.error(
-                    f"Failed to update document state for {doc.id}: {sanitize_exception_message(e)}",
-                    error_type=type(e).__name__,
+                    f"Failed to update document state for {doc.id}: {sanitize_exception_message(error)}",
+                    error_type=type(error).__name__,
                 )
