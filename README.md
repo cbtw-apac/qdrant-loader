@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/cbtw-apac-qdrant-loader-badge.png)](https://mseep.ai/app/cbtw-apac-qdrant-loader)
+
 # QDrant Loader
 
 [![PyPI - qdrant-loader](https://img.shields.io/pypi/v/qdrant-loader?label=qdrant-loader)](https://pypi.org/project/qdrant-loader/)
