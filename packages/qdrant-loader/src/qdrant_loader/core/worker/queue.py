@@ -136,21 +136,21 @@ class SQLiteJobQueue:
             (Job.status == self.RUNNING) & (Job.visibility_deadline <= now),
         )
 
-        async with self._session_factory() as session:
-            select_stmt = select(Job.id).where(claimable_filter)
-            if job_types:
-                select_stmt = select_stmt.where(Job.type.in_(job_types))
-            candidate_job_id = await session.scalar(
-                select_stmt.order_by(Job.enqueued_at.asc(), Job.id.asc()).limit(1)
+        candidate_job_id_query = select(Job.id).where(claimable_filter)
+        if job_types:
+            candidate_job_id_query = candidate_job_id_query.where(
+                Job.type.in_(job_types)
             )
+        candidate_job_id_subquery = (
+            candidate_job_id_query.order_by(Job.enqueued_at.asc(), Job.id.asc())
+            .limit(1)
+            .scalar_subquery()
+        )
 
-            if candidate_job_id is None:
-                await session.commit()
-                return None
-
+        async with self._session_factory() as session:
             result = await session.execute(
                 update(Job)
-                .where(Job.id == candidate_job_id, claimable_filter)
+                .where(Job.id == candidate_job_id_subquery, claimable_filter)
                 .values(
                     status=self.RUNNING,
                     started_at=now,
@@ -159,13 +159,20 @@ class SQLiteJobQueue:
                     attempts=Job.attempts + 1,
                     last_error=None,
                 )
+                .returning(Job.id)
             )
-            claimed = result.rowcount > 0
-            if not claimed:
+
+            # SQLite requires RETURNING cursors to be finalized before commit.
+            try:
+                claimed_job_id = result.scalar_one_or_none()
+            finally:
+                result.close()
+
+            if claimed_job_id is None:
                 await session.commit()
                 return None
 
-            claimed_job = await session.get(Job, candidate_job_id)
+            claimed_job = await session.get(Job, claimed_job_id)
             await session.commit()
             return claimed_job
 
