@@ -6,15 +6,15 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "qdrant-loader-workspace"
-version = "1.0.3"
-description = "A comprehensive toolkit for loading data into Qdrant vector database with MCP server support"
+name = "harborrag-workspace"
+version = "0.1.0"
+description = "A modular, provider-agnostic RAG framework for engineering knowledge with connectors, parsers, repositories, runtime, API, and MCP support"
 readme = "README.md"
 authors = [
-    { name = "Martin Papy", email = "martin.papy@cbtw.tech" },
+    { name = "CBTW APAC Development Team" },
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",
     "Operating System :: OS Independent",
@@ -33,7 +33,10 @@ requires-python = ">=3.12"
 file = "LICENSE"
 
 [project.urls]
-Homepage = "https://qdrant-loader.net"
+Homepage = "https://github.com/cbtw-apac/HarborRAG"
+Repository = "https://github.com/cbtw-apac/HarborRAG"
+Issues = "https://github.com/cbtw-apac/HarborRAG/issues"
+Documentation = "https://github.com/cbtw-apac/HarborRAG/tree/main/docs"
 
 [project.optional-dependencies]
 dev = [
@@ -42,6 +45,7 @@ dev = [
     "pytest-asyncio>=0.21.1",
     "pytest-mock>=3.12.0",
     "pytest-timeout>=2.3.0",
+    "pytest-xdist>=3.8.0",
     "black>=23.0.0",
     "isort>=5.12.0",
     "mypy>=1.0.0",
@@ -50,46 +54,52 @@ dev = [
     "requests>=2.28.0",
     "responses>=0.24.1",
     "requests-mock>=1.11.0",
-    # Authored directly by tests to build fixture .xlsx/.docx files; pinned explicitly
-    # so the suite does not rely on docling pulling them in transitively.
     "openpyxl>=3.1.0",
     "python-docx>=1.1.0",
-    "sqlite-web>=0.6.4",
-    "py-spy",
-    "snakeviz",
-    "memory-profiler",
     "prometheus-client>=0.19.0,<1.0.0",
-    "pytest-xdist>=3.8.0",
 ]
 docs = [
     "tomli>=2.0.0",
     "markdown>=3.5.0",
     "pygments>=2.15.0",
-    "cairosvg>=2.7.0",
-    "pillow>=12.2.0",
-    "pymdown-extensions>=10.21.3",
+    "pymdown-extensions>=10.0.0",
 ]
 
-[tool.setuptools.packages.find]
-where = [
-    "packages",
-]
+# The workspace root is a metadata-only project. Each package under packages/*
+# owns its own build configuration and importable src/ package.
+[tool.setuptools]
+py-modules = []
 
 [tool.black]
 line-length = 88
-target-version = [
-    "py312",
-]
+target-version = ["py312"]
 include = "\\.pyi?$"
-extend-exclude = "/(\n  # directories\n  \\.eggs\n  | \\.git\n  | \\.hg\n  | \\.mypy_cache\n  | \\.tox\n  | \\.venv\n  | build\n  | dist\n)/\n"
+extend-exclude = '''
+/(
+  # directories
+  \\.eggs
+  | \\.git
+  | \\.hg
+  | \\.mypy_cache
+  | \\.tox
+  | \\.venv
+  | build
+  | dist
+)/
+'''
 
 [tool.isort]
 profile = "black"
 multi_line_output = 3
 line_length = 88
 known_first_party = [
-    "qdrant_loader",
-    "mcp_server",
+    "harborrag",
+    "harborrag_core",
+    "harborrag_adapters",
+    "harborrag_engine",
+    "harborrag_runtime",
+    "harborrag_app",
+    "harborrag_mcp",
 ]
 
 [tool.mypy]
@@ -106,20 +116,31 @@ warn_unused_ignores = true
 warn_no_return = true
 warn_unreachable = true
 strict_equality = true
-mypy_path = "packages/qdrant-loader/src:packages/qdrant-loader-mcp-server/src:packages/qdrant-loader-core/src"
+mypy_path = "packages/harborrag-core/src:packages/harborrag-adapters/src:packages/harborrag-engine/src:packages/harborrag-runtime/src:packages/harborrag-app/src:packages/harborrag-mcp/src:packages/harborrag/src"
+
+# Package-local tests deliberately exercise abstract base classes (safe-super)
+# and index into loosely-typed diagnostics payloads; keep strictness for src only.
+exclude = "packages/[^/]+/tests/"
 
 [tool.pytest.ini_options]
 testpaths = [
     "tests",
+    "packages/harborrag-core/tests",
+    "packages/harborrag-adapters/tests",
+    "packages/harborrag-engine/tests",
+    "packages/harborrag-runtime/tests",
+    "packages/harborrag-app/tests",
+    "packages/harborrag-mcp/tests",
+    "packages/harborrag/tests",
 ]
 norecursedirs = [
-    "packages",
     ".*",
     "build",
     "dist",
     "venv",
     "env",
     "node_modules",
+    "htmlcov",
 ]
 python_files = [
     "test_*.py",
@@ -138,10 +159,13 @@ addopts = [
     "--tb=short",
 ]
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "slow: marks tests as slow (deselect with '-m not slow')",
     "integration: marks tests as integration tests",
     "unit: marks tests as unit tests",
-    "requires_deps: marks tests as requiring optional dependencies",
+    "smoke: fast import and wiring tests",
+    "blackbox: public API behavior tests",
+    "whitebox: internal architecture and contract tests",
+    "requires_deps: marks tests requiring optional dependencies",
     "workflow: marks tests that validate GitHub Actions workflow",
 ]
 filterwarnings = [
@@ -150,9 +174,15 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
+branch = true
 source = [
-    "packages",
-    "website",
+    "packages/harborrag-core/src",
+    "packages/harborrag-adapters/src",
+    "packages/harborrag-engine/src",
+    "packages/harborrag-runtime/src",
+    "packages/harborrag-app/src",
+    "packages/harborrag-mcp/src",
+    "packages/harborrag/src",
 ]
 omit = [
     "*/tests/*",
@@ -165,6 +195,9 @@ omit = [
 ]
 
 [tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 95
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
@@ -181,6 +214,11 @@ exclude_lines = [
 [tool.ruff]
 target-version = "py312"
 line-length = 88
+src = [
+    "packages",
+    "tests",
+    "scripts",
+]
 extend-exclude = [
     "venv",
     "venv-*",
@@ -209,13 +247,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = [
-    "F401",
-]
-"tests/*" = [
-    "B011",
-    "B017",
-]
+"__init__.py" = ["F401"]
+"tests/*" = ["B011", "B017"]
+"packages/*/tests/*" = ["B011", "B017"]
 
 [tool.uv]
 environments = [
@@ -224,16 +258,32 @@ environments = [
 
 [tool.uv.workspace]
 members = [
-    "packages/qdrant-loader",
-    "packages/qdrant-loader-mcp-server",
-    "packages/qdrant-loader-core",
+    "packages/harborrag-core",
+    "packages/harborrag-adapters",
+    "packages/harborrag-engine",
+    "packages/harborrag-runtime",
+    "packages/harborrag-app",
+    "packages/harborrag-mcp",
+    "packages/harborrag",
 ]
 
-[tool.uv.sources.qdrant-loader-core]
+[tool.uv.sources.harborrag-core]
 workspace = true
 
-[tool.uv.sources.qdrant-loader]
+[tool.uv.sources.harborrag-adapters]
 workspace = true
 
-[tool.uv.sources.qdrant-loader-mcp-server]
+[tool.uv.sources.harborrag-engine]
+workspace = true
+
+[tool.uv.sources.harborrag-runtime]
+workspace = true
+
+[tool.uv.sources.harborrag-app]
+workspace = true
+
+[tool.uv.sources.harborrag-mcp]
+workspace = true
+
+[tool.uv.sources.harborrag]
 workspace = true

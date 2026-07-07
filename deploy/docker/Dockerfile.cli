@@ -1,0 +1,26 @@
+# HarborRAG CLI image.
+# Provides the `harbor` command for diagnostics, ingestion, retrieval, and memory operations.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY packages ./packages
+COPY examples ./examples
+
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -e packages/harborrag-core \
+    && python -m pip install -e packages/harborrag-adapters \
+    && python -m pip install -e packages/harborrag-engine \
+    && python -m pip install -e packages/harborrag-memory \
+    && python -m pip install -e packages/harborrag-runtime \
+    && python -m pip install -e packages/harborrag-app \
+    && python -m pip install -e packages/harborrag-mcp \
+    && python -m pip install -e packages/harborrag
+
+ENTRYPOINT ["harbor"]
+CMD ["doctor", "--json"]

@@ -40,12 +40,12 @@ jobs:
       - name: Check release tag
         id: check
         run: |
-          # Only deploy docs for main qdrant-loader releases, not MCP server releases
-          if [[ "${{ github.event.release.tag_name }}" == qdrant-loader-v* ]]; then
+          # Only deploy docs for main harborrag releases, not sub-package releases
+          if [[ "${{ github.event.release.tag_name }}" == harborrag-v* ]]; then
             echo "✅ Main package release detected: ${{ github.event.release.tag_name }}"
             echo "should-deploy=true" >> $GITHUB_OUTPUT
           else
-            echo "⏭️  MCP server or other release detected: ${{ github.event.release.tag_name }}"
+            echo "⏭️  Sub-package or other release detected: ${{ github.event.release.tag_name }}"
             echo "📋 Skipping documentation deployment to avoid duplicates"
             echo "should-deploy=false" >> $GITHUB_OUTPUT
           fi
@@ -252,10 +252,10 @@ jobs:
           # Check if this was a release event and if we should deploy
           if [ "${{ github.event_name }}" = "release" ]; then
             if [ "${{ needs.check-release.result }}" = "success" ] && [ "${{ needs.check-release.outputs.should-deploy }}" = "true" ]; then
-              echo "📦 Release Type: Main package (qdrant-loader)"
+              echo "📦 Release Type: Main package (harborrag)"
               echo "🚀 Documentation deployment enabled"
             else
-              echo "📦 Release Type: MCP server or other"
+              echo "📦 Release Type: Sub-package or other"
               echo "⏭️  Documentation deployment skipped to avoid duplicates"
             fi
           fi

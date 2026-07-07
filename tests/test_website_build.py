@@ -149,9 +149,9 @@ class TestWebsiteBuildSystem:
         content = robots_template.read_text(encoding="utf-8")
 
         # Basic robots.txt structure checks
-        assert (
-            "User-agent:" in content
-        ), "Robots.txt should contain User-agent directive"
+        assert "User-agent:" in content, (
+            "Robots.txt should contain User-agent directive"
+        )
 
     def test_robots_template_structure(self):
         """Test that the robots.txt template has valid structure."""
@@ -159,12 +159,12 @@ class TestWebsiteBuildSystem:
         content = robots_template.read_text(encoding="utf-8")
 
         # Basic robots.txt structure checks
-        assert (
-            "User-agent:" in content
-        ), "Robots.txt should contain User-agent directive"
-        assert (
-            "Allow:" in content or "Disallow:" in content
-        ), "Robots.txt should contain Allow or Disallow directive"
+        assert "User-agent:" in content, (
+            "Robots.txt should contain User-agent directive"
+        )
+        assert "Allow:" in content or "Disallow:" in content, (
+            "Robots.txt should contain Allow or Disallow directive"
+        )
 
     @pytest.mark.requires_deps
     def test_favicon_generation_dependencies(self):
@@ -187,9 +187,9 @@ class TestWebsiteBuildSystem:
         content = coverage_template.read_text(encoding="utf-8")
 
         # Check for coverage-related elements
-        assert (
-            "coverage" in content.lower()
-        ), "Coverage template should mention coverage"
+        assert "coverage" in content.lower(), (
+            "Coverage template should mention coverage"
+        )
 
     def test_docs_template_structure(self):
         """Test that the docs template has proper structure."""
@@ -258,25 +258,25 @@ class TestWebsiteBuildIntegration:
                     site_dir = mock_project_structure / "site"
 
                     # Check main pages
-                    assert (
-                        site_dir / "index.html"
-                    ).exists(), "Index page should be created"
+                    assert (site_dir / "index.html").exists(), (
+                        "Index page should be created"
+                    )
 
                     # Check SEO files
-                    assert (
-                        site_dir / "sitemap.xml"
-                    ).exists(), "Sitemap should be created"
-                    assert (
-                        site_dir / "robots.txt"
-                    ).exists(), "Robots.txt should be created"
+                    assert (site_dir / "sitemap.xml").exists(), (
+                        "Sitemap should be created"
+                    )
+                    assert (site_dir / "robots.txt").exists(), (
+                        "Robots.txt should be created"
+                    )
 
                     # Check that files have content
                     index_content = (site_dir / "index.html").read_text(
                         encoding="utf-8"
                     )
-                    assert (
-                        len(index_content) > 100
-                    ), "Index page should have substantial content"
+                    assert len(index_content) > 100, (
+                        "Index page should have substantial content"
+                    )
 
                 else:
                     # If build fails, that's okay for this test - we're just checking structure

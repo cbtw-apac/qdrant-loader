@@ -1,465 +1,53 @@
 # Developer Documentation
 
-Welcome to the QDrant Loader developer documentation! This guide provides everything you need to understand, extend, test, and deploy QDrant Loader. Whether you're contributing to the core project or building custom extensions, you'll find detailed technical information and practical examples here.
+Everything needed to understand, extend, test, and deploy HarborRAG.
 
-## 🎯 Quick Navigation
+## Quick navigation
 
-### Core Development
+- [Architecture Overview](architecture/README.md) — package map, dependency direction, and a tour of `harborrag-core`'s contracts, domain, ports, execution, security, and observability primitives.
+- [Extending HarborRAG](extending/README.md) — implement a real connector, parser, model adapter, or repository using the base + mock pattern.
+- [Testing](testing/README.md) — package-local test layout, markers, and the 95% coverage gate.
+- [Deployment](deployment/README.md) — the `deploy/` Compose stacks and helper scripts.
 
-- **[Architecture Guide](./architecture/)** - System design, components, and data flow
-- **[Extending QDrant Loader](./extending/)** - Custom connectors and processors
+For setup, branching, and the PR checklist, see the root [CONTRIBUTING.md](../CONTRIBUTING.md) — that file is the canonical source for contribution workflow.
 
-### Quality & Deployment
+## Coding standards
 
-- **[Testing Guide](./testing/)** - Testing strategies, frameworks, and best practices
-- **[Deployment Guide](./deployment/)** - Production deployment, containerization, and CI/CD
+These apply on top of the architecture rules in [CONTRIBUTING.md](../CONTRIBUTING.md#architecture-rules); they're about how code is written inside a package, not which package it belongs in.
 
-### Contributing
+### Class and type conventions
 
-- **[Best Practices](./contributing/)** - Pythonic patterns, AI/RAG guidelines, and PR review checklist
+- Prefer `@dataclass(slots=True)` for data-carrying classes, matching the existing style across `harborrag-core`'s domain/contracts and every `mock.py`. Use `frozen=True` for immutable value types (IDs, specs, policies).
+- Prefer `typing.Protocol` for structural contracts that multiple unrelated classes satisfy (see `harborrag_core.ports.*`); use `abc.ABC` + `@abstractmethod` for the concrete base classes adapters subclass (see `harborrag_adapters.*.base`).
+- Don't override `__new__` unless implementing a strict singleton or working with an immutable type — initialization belongs in `__init__` or a dataclass field default.
 
-### Documentation
+### Dependency injection
 
-- **[Documentation Maintenance](./documentation/)** - Maintaining and updating documentation
-
-## 🏗️ Architecture Overview
-
-QDrant Loader follows a modular architecture designed for multi-project document ingestion and vector storage:
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│ QDrant Loader Core │
-├─────────────────────────────────────────────────────────────┤
-│ Data Sources │ Processing │ Vector Storage │
-│ ┌─────────────┐ │ ┌─────────────┐ │ ┌─────────────────┐ │
-│ │ Connectors │ │ │ Processors │ │ │ QDrant Client │ │
-│ │ - Local │ │ │ - MarkItDown│ │ │ - Collections │ │
-│ │ - Git │ │ │ - Text │ │ │ - Vectors │ │
-│ │ - Confluence│ │ │ - Chunking │ │ │ - Search │ │
-│ │ - Jira │ │ │ - Embedding │ │ │ - Metadata │ │
-│ │ - PublicDocs│ │ │ │ │ │ │ │
-│ └─────────────┘ │ └─────────────┘ │ └─────────────────┘ │
-├─────────────────────────────────────────────────────────────┤
-│ MCP Server │ CLI Interface │ Configuration │
-│ ┌─────────────┐ │ ┌─────────────┐ │ ┌─────────────────┐ │
-│ │ Search APIs │ │ │ Commands │ │ │ YAML Config │ │
-│ │ - Semantic │ │ │ - init │ │ │ - Multi-project │ │
-│ │ - Hierarchy │ │ │ - ingest │ │ │ - Workspace │ │
-│ │ - Attachment│ │ │ - config │ │ │ - Environment │ │
-│ │ │ │ │ - project │ │ │ - Validation │ │
-│ └─────────────┘ │ └─────────────┘ │ └─────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## 🚀 Getting Started for Developers
-
-### 1. Development Environment Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/martin-papy/qdrant-loader.git
-cd qdrant-loader
-
-# Install all workspace packages with development dependencies
-# uv automatically creates and manages the virtual environment
-uv sync --all-packages --all-extras
-
-# Start QDrant for development
-docker run -p 6333:6333 qdrant/qdrant:latest
-```
-
-### 2. Running Tests
-
-```bash
-# Run all tests from workspace root
-make test
-
-# Run specific package tests
-make test-loader
-make test-mcp
-make test-core
-
-# Run with coverage
-make test-coverage
-
-# Or run pytest directly via uv
-uv run pytest packages/qdrant-loader/tests/
-uv run pytest packages/qdrant-loader-mcp-server/tests/ --cov=src --cov-report=html
-```
-
-### 3. Code Quality Checks
-
-```bash
-# From workspace root
-make lint
-make format
-
-# Or run tools directly via uv
-uv run ruff check --fix .
-uv run black .
-uv run isort .
-```
-
-## 📚 Core Concepts for Developers
-
-### Data Flow Architecture
-
-Understanding the data flow is crucial for development:
-
-1. **Configuration Phase**
-   - Multi-project workspace configuration
-   - Global settings and project-specific sources
-   - Environment variable management
-   - Validation and initialization
-
-2. **Ingestion Phase**
-   - Connectors fetch documents from data sources
-   - File conversion using MarkItDown library
-   - Content extraction and cleaning
-   - Chunking strategies for large documents
-   - Metadata extraction and enrichment
-
-3. **Embedding Phase**
-   - Text content converted to embeddings via configurable LLM providers (OpenAI, Azure OpenAI, Ollama)
-   - Batch processing for efficiency
-   - Error handling and retries
-   - Progress tracking and metrics
-
-4. **Storage Phase**
-   - Vectors stored in QDrant collections
-   - Metadata indexed for filtering
-   - Project-based organization
-   - State tracking and change detection
-
-5. **Search Phase (MCP Server)**
-   - Semantic similarity search
-   - Hierarchy-aware search
-   - Attachment-specific search
-   - Project filtering and organization
-
-### Connector System
-
-QDrant Loader uses a connector-based architecture for data sources:
+Pass the specific value or sub-config a class needs, not a large settings object:
 
 ```python
-# Example connector implementation
-from qdrant_loader.connectors.base import BaseConnector
-from qdrant_loader.core.document import Document
+# Avoid: monolithic config passing
+def __init__(self, config: EngineConfig):
+    self.chunk_size = config.chunking.chunk_size
 
-class CustomConnector(BaseConnector):
-    async def get_documents(self) -> list[Document]:
-        """Get documents from the source."""
-        documents = []
-        # Your custom logic here
-        for item in self.fetch_data():
-            doc = Document(
-                content=item.content,
-                metadata=item.metadata,
-                source_type="custom",
-                source_name=self.config.name
-            )
-            documents.append(doc)
-        return documents
+# Prefer: granular injection
+def __init__(self, chunk_size: int):
+    self.chunk_size = chunk_size
 ```
 
-Available connectors:
+This is why `EngineConfig`, `EnginePolicy`, `McpToolPolicy`, and similar types are small, focused dataclasses rather than one large settings object.
 
-- `LocalFileConnector` - Local file system
-- `GitConnector` - Git repositories
-- `ConfluenceConnector` - Confluence spaces
-- `JiraConnector` - Jira projects
-- `PublicDocsConnector` - Public documentation sites
+### RAG-specific practices
 
-## 🔧 Development Workflows
+- **Metadata hygiene** — every `HarborDocument` should carry consistent `DocumentMetadata` and `DocumentProvenance`; when you add a metadata field, update the normalizer and any repository payload mapping (`HarborDocument.vector_payload()`) together.
+- **Provenance** — preserve the connector/parser source of truth (URL, file path, locator) so retrieval results can cite back to it.
+- **Embedding compatibility** — vectors from different embedding models or dimensions are not interchangeable; a real vector repository adapter should key collections by embedding provider + dimension, not assume one global collection.
 
-### Contributing to Core
+### Logging and observability
 
-1. **Fork and Clone**
+Use `harborrag_core.observability.events.InMemoryEventBus` and `harborrag_core.observability.metrics.InMemoryMetrics` (or their eventual real backends) rather than ad hoc `print`/`logging` calls scattered through orchestration code — this keeps engine/runtime code testable without capturing stdout. Route anything that might contain a secret through `harborrag_core.security.redaction.redact_secrets` before logging it.
 
-   ```bash
-   git clone https://github.com/your-username/qdrant-loader.git
-   cd qdrant-loader
-   git remote add upstream https://github.com/martin-papy/qdrant-loader.git
-   ```
+## Related
 
-2. **Create Feature Branch**
-
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-
-3. **Development Cycle**
-
-   ```bash
-   # Make changes
-   # Run tests
-   make test
-
-   # Check code quality
-   make lint
-
-   # Commit changes
-   git commit -m "feat: add new feature"
-   ```
-
-4. **Submit Pull Request**
-   - Ensure all tests pass
-   - Update documentation
-   - Add changelog entry
-   - Request review
-
-### Custom Connector Development
-
-1. **Create Connector Structure**
-
-   ```text
-   my-connector/
-   ├── src/
-   │   └── my_connector/
-   │       ├── __init__.py
-   │       ├── connector.py
-   │       └── config.py
-   ├── tests/
-   └── pyproject.toml
-   ```
-
-2. **Implement Connector Interface**
-
-   ```python
-   from qdrant_loader.connectors.base import BaseConnector
-   from qdrant_loader.config.source_config import SourceConfig
-
-   class MyConnector(BaseConnector):
-       def __init__(self, config: SourceConfig):
-           super().__init__(config)
-           # Initialize your connector
-
-       async def get_documents(self) -> list[Document]:
-           # Implement document fetching logic
-           pass
-   ```
-
-3. **Add Configuration Support**
-
-   ```python
-   from pydantic import BaseModel
-
-   class MyConnectorConfig(SourceConfig):
-       source_type: str = "my_connector"
-       api_key: str
-       base_url: str
-       # Add your configuration fields
-   ```
-
-## 📖 Detailed Guides
-
-### [Architecture Guide](./architecture/)
-
-Deep dive into system design, component interactions, and architectural decisions. Essential reading for understanding how QDrant Loader works internally.
-
-**Key Topics:**
-
-- Multi-project workspace architecture
-- Connector and processor interfaces
-- Async ingestion pipeline design
-- State management and change detection
-- MCP server integration
-
-### [Extending Guide](./extending/)
-
-Comprehensive guide for building custom functionality and connectors. Learn how to extend QDrant Loader for your specific needs.
-
-**Key Topics:**
-
-- Custom connector development
-- File conversion extensions
-- Configuration schema extensions
-- Testing custom components
-- Packaging and distribution
-
-### [Testing Guide](./testing/)
-
-Testing strategies, frameworks, and best practices for ensuring code quality and reliability.
-
-**Key Topics:**
-
-- Unit testing with pytest
-- Integration testing strategies
-- Async testing patterns
-- Mock and fixture usage
-- CI/CD integration
-
-### [Deployment Guide](./deployment/)
-
-Production deployment strategies, containerization, and operational best practices.
-
-**Key Topics:**
-
-- Docker containerization
-- Environment configuration
-- Monitoring and logging
-- Performance optimization
-- Security considerations
-
-## 🛠️ Development Tools and Utilities
-
-### Available CLI Commands
-
-```bash
-# Initialize QDrant collection
-qdrant-loader init --workspace .
-
-# Ingest documents
-qdrant-loader ingest --workspace .
-
-# View configuration
-qdrant-loader config --workspace .
-
-# Project management
-qdrant-loader config --workspace .
-qdrant-loader config --workspace .
-qdrant-loader config --workspace .
-
-# Start MCP server
-mcp-qdrant-loader
-```
-
-### Debugging and Profiling
-
-```bash
-# Enable debug logging
-qdrant-loader --log-level DEBUG --workspace . ingest
-
-# Profile performance
-qdrant-loader ingest --workspace . --profile
-
-# Memory profiling (requires memory_profiler)
-python -m memory_profiler your_script.py
-```
-
-### Development Scripts
-
-```bash
-# Makefile targets
-make test    # Run all tests
-make lint    # Run linting
-make format  # Format code
-make docs    # Build documentation
-make clean   # Clean build artifacts
-```
-
-## 🔗 Integration Examples
-
-### Workspace Configuration
-
-```yaml
-# config.yaml
-global:
-  qdrant:
-    url: "http://localhost:6333"
-    collection_name: "my_collection"
-  llm:
-    provider: "openai"
-    base_url: "https://api.openai.com/v1"
-    api_key: "${LLM_API_KEY}"
-    models:
-      embeddings: "text-embedding-3-small"
-      chat: "gpt-4o-mini"
-    embeddings:
-      vector_size: 1536
-
-projects:
-  - project_id: "docs"
-    sources:
-      - source_type: "local_files"
-        name: "documentation"
-        config:
-          base_url: "file://./docs"
-          include_paths:
-            - "**/*.md"
-```
-
-### Programmatic Usage
-
-```python
-from qdrant_loader.config import Settings, get_settings
-from qdrant_loader.core.async_ingestion_pipeline import AsyncIngestionPipeline
-
-# Load settings
-settings = get_settings()
-
-# Create and run pipeline
-pipeline = AsyncIngestionPipeline(settings)
-await pipeline.run()
-```
-
-### MCP Server Integration
-
-```python
-# The MCP server runs as a separate process
-# Start with: mcp-qdrant-loader
-# It provides search tools to AI development environments
-# Tools available:
-# - search_documents
-# - search_with_hierarchy
-# - search_attachments
-```
-
-## 📝 Development Checklist
-
-### Before Submitting Code
-
-- [ ] All tests pass (`make test`)
-- [ ] Code style checks pass (`make lint`)
-- [ ] Type checking passes (`mypy`)
-- [ ] Documentation updated
-- [ ] Changelog entry added (if applicable)
-
-### For New Features
-
-- [ ] Design document created (for major features)
-- [ ] Tests cover all code paths
-- [ ] Documentation includes examples
-- [ ] Backward compatibility maintained
-- [ ] Configuration schema updated (if needed)
-
-### For Bug Fixes
-
-- [ ] Root cause identified
-- [ ] Regression test added
-- [ ] Fix verified in multiple environments
-- [ ] Documentation updated (if needed)
-
-## 🤝 Community and Support
-
-### Getting Help
-
-- **GitHub Issues** - Bug reports and feature requests
-- **Discussions** - Questions and community support
-- **Documentation** - Comprehensive guides and references
-- **Code Examples** - Real-world usage patterns
-
-### Contributing Guidelines
-
-1. **Code of Conduct** - Be respectful and inclusive
-2. **Issue Templates** - Use provided templates for consistency
-3. **Pull Request Process** - Follow the established workflow
-4. **Review Process** - Participate in code reviews
-5. **Documentation** - Keep documentation up to date
-
-### Development Roadmap
-
-- **Core Features** - Enhanced search capabilities and performance
-- **Connectors** - Additional data source integrations
-- **Developer Experience** - Better tooling and documentation
-- **Enterprise Features** - Advanced security and compliance
-
----
-
-**Ready to start developing?** Choose your path:
-
-- **New to QDrant Loader?** Start with the [Architecture Guide](./architecture/)
-- **Creating connectors?** Follow the [Extending Guide](./extending/)
-- **Setting up CI/CD?** Use the [Deployment Guide](./deployment/)
-
-**Need help?** Join our community discussions or open an issue on GitHub!
+- [What is HarborRAG?](../getting-started/what-is-harborrag.md) — project overview and current status.
+- [CLI Reference](../users/cli-reference/README.md) and [MCP Mock Tools](../users/detailed-guides/mcp-server/README.md) — the current user-facing surfaces.

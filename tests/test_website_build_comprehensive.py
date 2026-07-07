@@ -1184,15 +1184,15 @@ if __name__ == "__main__":
         assert "fetch('website/status.json')" in content, "Should fetch website status"
 
         # Verify status.json files exist for all packages
-        assert (
-            coverage_dir / "loader" / "status.json"
-        ).exists(), "Loader status.json should exist"
-        assert (
-            coverage_dir / "mcp" / "status.json"
-        ).exists(), "MCP status.json should exist"
-        assert (
-            coverage_dir / "website" / "status.json"
-        ).exists(), "Website status.json should exist"
+        assert (coverage_dir / "loader" / "status.json").exists(), (
+            "Loader status.json should exist"
+        )
+        assert (coverage_dir / "mcp" / "status.json").exists(), (
+            "MCP status.json should exist"
+        )
+        assert (coverage_dir / "website" / "status.json").exists(), (
+            "Website status.json should exist"
+        )
 
         # Verify status.json files have proper structure
         import json

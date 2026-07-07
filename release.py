@@ -13,29 +13,48 @@ from click import command, confirm, option
 from click.termui import prompt
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv(override=False)
 
 # Package definitions
 PACKAGES = {
-    "qdrant-loader-workspace": {
+    "harborrag-workspace": {
         "path": ".",
         "pyproject": "pyproject.toml",
         "create_release": False,  # Workspace config, no need for GitHub release
     },
-    "qdrant-loader": {
-        "path": "packages/qdrant-loader",
-        "pyproject": "packages/qdrant-loader/pyproject.toml",
+    "harborrag-core": {
+        "path": "packages/harborrag-core",
+        "pyproject": "packages/harborrag-core/pyproject.toml",
         "create_release": True,
     },
-    "qdrant-loader-mcp-server": {
-        "path": "packages/qdrant-loader-mcp-server",
-        "pyproject": "packages/qdrant-loader-mcp-server/pyproject.toml",
+    "harborrag-adapters": {
+        "path": "packages/harborrag-adapters",
+        "pyproject": "packages/harborrag-adapters/pyproject.toml",
         "create_release": True,
     },
-    "qdrant-loader-core": {
-        "path": "packages/qdrant-loader-core",
-        "pyproject": "packages/qdrant-loader-core/pyproject.toml",
+    "harborrag-engine": {
+        "path": "packages/harborrag-engine",
+        "pyproject": "packages/harborrag-engine/pyproject.toml",
+        "create_release": True,
+    },
+    "harborrag-runtime": {
+        "path": "packages/harborrag-runtime",
+        "pyproject": "packages/harborrag-runtime/pyproject.toml",
+        "create_release": True,
+    },
+    "harborrag-app": {
+        "path": "packages/harborrag-app",
+        "pyproject": "packages/harborrag-app/pyproject.toml",
+        "create_release": True,
+    },
+    "harborrag-mcp": {
+        "path": "packages/harborrag-mcp",
+        "pyproject": "packages/harborrag-mcp/pyproject.toml",
+        "create_release": True,
+    },
+    "harborrag": {
+        "path": "packages/harborrag",
+        "pyproject": "packages/harborrag/pyproject.toml",
         "create_release": True,
     },
 }
@@ -44,17 +63,17 @@ PACKAGES = {
 def get_packages_for_release() -> list[str]:
     """Get packages that need releases in the correct order.
 
-    Returns packages in order where qdrant-loader is LAST,
+    Returns packages in order where harborrag is LAST,
     ensuring it appears as the latest release in GitHub.
     """
     packages_to_release = [
         name for name, info in PACKAGES.items() if info.get("create_release", True)
     ]
 
-    # Ensure qdrant-loader is last (will be the latest release)
-    if "qdrant-loader" in packages_to_release:
-        packages_to_release.remove("qdrant-loader")
-        packages_to_release.append("qdrant-loader")
+    # Ensure harborrag is last (will be the latest release)
+    if "harborrag" in packages_to_release:
+        packages_to_release.remove("harborrag")
+        packages_to_release.append("harborrag")
 
     return packages_to_release
 
@@ -113,8 +132,8 @@ def get_package_version(package_name: str) -> str:
 def get_current_version() -> str:
     """Get the current version from the main package."""
     logger = logging.getLogger(__name__)
-    # Use qdrant-loader as the source of truth for version
-    main_package = "qdrant-loader"
+    # Use harborrag as the source of truth for version
+    main_package = "harborrag"
     version = get_package_version(main_package)
     logger.debug(f"Current version: {version}")
     return version
@@ -813,7 +832,7 @@ def update_all_development_status_classifiers(
 
 def get_internal_package_names() -> set[str]:
     """Return the set of internal package names (excluding the workspace meta-package)."""
-    return {name for name in PACKAGES.keys() if name != "qdrant-loader-workspace"}
+    return {name for name in PACKAGES.keys() if name != "harborrag-workspace"}
 
 
 def _update_dependency_string(
@@ -939,7 +958,7 @@ def update_all_internal_dependencies_versions(
 
     internal_names = get_internal_package_names()
     for package_name in PACKAGES.keys():
-        if package_name == "qdrant-loader-workspace":
+        if package_name == "harborrag-workspace":
             continue
         changes = update_internal_dependencies_for_package(
             package_name, internal_names, target_version, dry_run
@@ -961,18 +980,18 @@ def update_all_internal_dependencies_versions(
 @option(
     "--sync-versions",
     is_flag=True,
-    help="Sync all packages to the same version (uses qdrant-loader as source of truth)",
+    help="Sync all packages to the same version (uses harborrag as source of truth)",
 )
 def release(dry_run: bool = False, verbose: bool = False, sync_versions: bool = False):
     """
     Orchestrate a coordinated release across all packages: compute and apply a unified version, run safety checks, update pyproject metadata, commit and push changes, tag, and create GitHub releases.
 
-    When invoked with sync_versions=True the command only synchronizes all package versions, development-status classifiers, and internal dependency pins to the qdrant-loader package version and then exits. In normal mode it performs repository and CI checks, prompts for a version bump (major/minor/patch/beta/custom), validates CHANGELOG.md, applies the version and classifier updates, pins internal dependencies, commits and pushes changes, creates annotated tags for each releasable package, and creates GitHub releases. Use dry_run=True to simulate all steps without making any persistent changes; use verbose=True to enable more detailed logging.
+    When invoked with sync_versions=True the command only synchronizes all package versions, development-status classifiers, and internal dependency pins to the harborrag package version and then exits. In normal mode it performs repository and CI checks, prompts for a version bump (major/minor/patch/beta/custom), validates CHANGELOG.md, applies the version and classifier updates, pins internal dependencies, commits and pushes changes, creates annotated tags for each releasable package, and creates GitHub releases. Use dry_run=True to simulate all steps without making any persistent changes; use verbose=True to enable more detailed logging.
 
     Parameters:
         dry_run (bool): If True, simulate actions without writing files, running non-whitelisted commands, committing, pushing, or creating releases.
         verbose (bool): If True, enable verbose (debug) logging output.
-        sync_versions (bool): If True, only synchronize all packages to the qdrant-loader version (update versions, classifiers, and internal dependency pins) and exit.
+        sync_versions (bool): If True, only synchronize all packages to the harborrag version (update versions, classifiers, and internal dependency pins) and exit.
     """
     # Setup logging
     logger = setup_logging(verbose)
@@ -982,9 +1001,9 @@ def release(dry_run: bool = False, verbose: bool = False, sync_versions: bool = 
         print("🔄 SYNCING PACKAGE VERSIONS")
         print("─" * 40)
 
-        # Get the source version from qdrant-loader
-        source_version = get_package_version("qdrant-loader")
-        print(f"Using qdrant-loader version as source: {source_version}")
+        # Get the source version from harborrag
+        source_version = get_package_version("harborrag")
+        print(f"Using harborrag version as source: {source_version}")
 
         if dry_run:
             print("\n[DRY RUN] Would sync all packages to this version:")
@@ -1004,7 +1023,7 @@ def release(dry_run: bool = False, verbose: bool = False, sync_versions: bool = 
                 "\n[DRY RUN] Would also pin internal dependencies to this version where applicable:"
             )
             for package_name in PACKAGES.keys():
-                if package_name == "qdrant-loader-workspace":
+                if package_name == "harborrag-workspace":
                     continue
                 print(
                     f"   • {package_name}: internal deps referencing repo packages → '=={source_version}'"
@@ -1193,7 +1212,7 @@ def release(dry_run: bool = False, verbose: bool = False, sync_versions: bool = 
         internal_names = get_internal_package_names()
         any_internal_changes = False
         for package_name in PACKAGES.keys():
-            if package_name == "qdrant-loader-workspace":
+            if package_name == "harborrag-workspace":
                 continue
             changes = update_internal_dependencies_for_package(
                 package_name, internal_names, new_version, True

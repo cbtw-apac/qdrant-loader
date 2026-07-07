@@ -1,12 +1,23 @@
-# CodeRabbit Configuration for qdrant-loader monorepo
-# Schema: https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration for the HarborRAG Python monorepo.
+# Place this file at repository root as `.coderabbit.yaml`.
+# Schema reference: https://docs.coderabbit.ai/reference/configuration
 
 language: "en-US"
 
-tone_instructions: "Be direct and precise. Focus on correctness, resource safety, and security. Flag real bugs and risks, not style nits already handled by Ruff and Black. For every issue flagged, provide a corrected code snippet and a one-sentence rationale."
+tone_instructions: >
+  Be direct, precise, and engineering-focused. Prioritize correctness, package
+  boundary violations, security, resource safety, async/concurrency risks,
+  provider lifecycle issues, and test coverage. Do not spend review budget on
+  formatting nits already handled by Ruff, Black, or isort. For every issue,
+  include a concrete fix suggestion and one-sentence rationale.
 
 reviews:
   profile: assertive
+  request_changes_workflow: true
+  review_status: true
+  high_level_summary: true
+  review_details: true
+  poem: false
 
   auto_review:
     enabled: true
@@ -14,251 +25,319 @@ reviews:
     base_branches:
       - main
       - develop
+      - release/.*
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+      - "[skip review]"
+    ignore_usernames:
+      - dependabot[bot]
+      - renovate[bot]
+      - github-actions[bot]
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 5
 
   path_filters:
     - "**/*"
-    - "!**/*.md"
-    - "!**/docs/**"
-    - "!**/website/**"
-    - "!**/.egg-info/**"
+    - "!**/.venv/**"
+    - "!**/venv/**"
+    - "!**/env/**"
+    - "!**/.tox/**"
+    - "!**/.mypy_cache/**"
+    - "!**/.ruff_cache/**"
+    - "!**/.pytest_cache/**"
     - "!**/__pycache__/**"
+    - "!**/.egg-info/**"
+    - "!**/build/**"
     - "!**/dist/**"
+    - "!**/htmlcov/**"
+    - "!**/.coverage"
+    - "!**/coverage.xml"
     - "!**/*.lock"
+    - "!**/*.zip"
+    - "!**/*.tar"
+    - "!**/*.tar.gz"
+    - "!**/*.whl"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.jpeg"
+    - "!**/*.gif"
+    - "!**/*.pdf"
 
   high_level_summary_instructions: >
-    Summarise: (1) which connectors or pipeline stages are affected,
-    (2) any config schema changes that are breaking or additive,
-    (3) whether tests cover the changed code paths,
-    (4) any security or resource-safety concerns.
-    Keep it under 150 words.
+    Summarize: (1) which HarborRAG package boundaries are touched,
+    (2) whether public contracts/base classes changed, (3) whether mocks and
+    package-local tests were updated, (4) whether coverage remains at least 95%,
+    and (5) any security, async, resource-lifecycle, or dependency-direction risk.
+    Keep it under 180 words.
 
   auto_title_instructions: >
     Follow Conventional Commits: type(scope): description.
     Valid types: feat, fix, refactor, perf, test, docs, ci, chore.
-    Scope should be the package or connector name (e.g. confluence, git, state, mcp-server).
+    Scope should be the package or feature family, for example core, adapters,
+    connectors, parsers, repositories, engine, runtime, app, mcp, tests, ci.
 
   path_instructions:
-    - path: "packages/qdrant-loader/src/qdrant_loader/connectors/**"
+    - path: "packages/harborrag-core/src/harborrag_core/**"
       instructions: >
-        This is the connector layer — the highest-risk area of the codebase.
+        Core is the pure contract/domain layer. Verify that it does not import
+        harborrag_adapters, harborrag_engine, harborrag_runtime, harborrag_app,
+        harborrag_mcp, or the meta-package. New domain objects should be small,
+        deterministic, typed, and dependency-light. Flag provider SDK imports,
+        network calls, filesystem side effects, environment reads, or concrete
+        adapter references in core.
 
-        Check for:
-        - Every connector must use `async with` or implement `__aenter__`/`__aexit__`
-          to guarantee session cleanup. Flag any code path where a `requests.Session`
-          or aiohttp session could leak if an exception is raised.
-        - Rate limiting: verify that any new HTTP calls go through the shared
-          RateLimiter in `connectors/shared/http.py`, not raw `requests.get()`.
-        - Pagination: ensure all paginated API calls handle empty pages and
-          off-by-one termination conditions correctly.
-        - Authentication headers must never appear in log output. All exception
-          messages must pass through `sanitize_exception_message()` before logging.
-        - Bare `except Exception:` blocks are not acceptable — catch specific
-          exceptions (HTTPError, ConnectionError, TimeoutError) and re-raise or
-          handle deliberately.
-        - Connector registry: if a new connector is added, verify it is registered
-          in `connectors/registry.py` and has a corresponding factory entry.
-        - `get_documents()` must be `async def` and must yield or return a list of
-          `Document` objects — no silent empty returns on error.
-
-    - path: "packages/qdrant-loader/src/qdrant_loader/connectors/confluence/**"
+    - path: "packages/harborrag-core/src/harborrag_core/ports/**"
       instructions: >
-        Confluence connector supports Cloud (BasicAuth) and Data Center (Bearer).
-        Check for:
-        - Any new auth logic must handle both deployment types; look for missing
-          `if self.deployment_type == DeploymentType.CLOUD` branches.
-        - Attachment downloads are a resource-leak hotspot — verify temp files and
-          file handles are always closed in `finally` blocks or context managers.
-        - Rate limiting must apply to attachment downloads as well as page fetches.
-        - Pagination cursors (`_links.next`) must be followed until absent;
-          flag any loop that terminates on a fixed page count.
+        Ports define Protocol or abstract boundaries only. Check that ports do
+        not contain provider-specific implementation logic, concrete registry
+        lookup, hardcoded SDK types, HTTP clients, database clients, or cloud
+        credentials. When a port changes, require corresponding mock/fake tests
+        under packages/harborrag-core/tests and affected adapter mock updates.
 
-    - path: "packages/qdrant-loader/src/qdrant_loader/connectors/git/**"
+    - path: "packages/harborrag-core/src/harborrag_core/security/**"
       instructions: >
-        Git connector clones repos and traverses files using GitPython.
-        Check for:
-        - Command injection risk: branch names, repo URLs, and file paths from
-          config must never be interpolated into shell commands. Verify all
-          GitPython calls use object APIs, not `repo.git.execute()` with
-          user-supplied strings.
-        - Large repo handling: ensure timeouts and size limits are enforced before
-          clone completes to avoid filling disk.
-        - Credential leakage: SSH key paths and HTTPS tokens must not appear in
-          exception messages or debug logs.
-        - Temp directories created for cloning must be cleaned up on exception paths.
+        Security helpers are a trust boundary. Check that secret redaction covers
+        api_key, token, password, secret, credential, Authorization Bearer, and
+        common cloud/API key forms. URL policy must reject unsafe schemes and
+        make SSRF-prone host handling explicit. Do not allow secrets in repr,
+        logs, exception messages, or serialized diagnostics.
 
-    - path: "packages/qdrant-loader/src/qdrant_loader/connectors/jira/**"
+    - path: "packages/harborrag-adapters/src/harborrag_adapters/connectors/**"
       instructions: >
-        Jira connector has separate Cloud and Data Center implementations.
-        Check for:
-        - Auth handling must cover both Cloud (Basic Auth with API token) and
-          Data Center (Bearer token); flag any new auth code missing one branch.
-        - Issue traversal must handle pagination via `startAt`/`maxResults` correctly;
-          flag any loop that stops before `total` is reached.
-        - Changelog fetching is optional — verify it is gated on config and does not
-          silently fail if the field is absent from the API response.
-        - Exception messages must pass through `sanitize_exception_message()` to
-          prevent token or email leakage in logs.
+        Connectors must normalize external sources into core RawDocument or
+        SourceRecord shapes. Base and mock implementations must stay in this
+        folder. When adding real connectors, require explicit authentication
+        handling, pagination termination, retry/rate-limit strategy, timeout,
+        session cleanup, source metadata, stable IDs, and secret redaction. Flag
+        raw requests without timeout, unbounded directory crawls, path traversal,
+        shell command construction, and connector code that bypasses core ports.
 
-    - path: "packages/qdrant-loader/src/qdrant_loader/connectors/localfile/**"
+    - path: "packages/harborrag-adapters/src/harborrag_adapters/parsers/**"
       instructions: >
-        Local file connector scans directories and converts via MarkItDown.
-        Check for:
-        - Path traversal: user-supplied directory paths must be resolved and
-          validated to stay within the configured root; flag any `open()` call
-          without a bounds check.
-        - File size limits must be enforced before reading into memory; flag any
-          file read without a size guard.
-        - All file handles must be closed in `finally` blocks or context managers —
-          no bare `open()` without `with`.
-        - Unsupported file types must be skipped gracefully, not raise unhandled
-          exceptions that abort the entire ingestion run.
+        Parsers convert raw content into ParsedDocument without doing ingestion
+        orchestration. Base and mock implementations must stay in this folder.
+        Check file-size guards, temp-file cleanup, subprocess timeouts, parser
+        fallback behavior, parse quality metadata, and preservation of structured
+        elements. For PDF/Office engines, flag unbounded memory reads, unsafe
+        shell calls, missing fallback warnings, and provider raw payload leakage
+        outside explicit diagnostic fields.
 
-    - path: "packages/qdrant-loader/src/qdrant_loader/connectors/publicdocs/**"
+    - path: "packages/harborrag-adapters/src/harborrag_adapters/models/**"
       instructions: >
-        Public docs connector crawls URLs and parses HTML with BeautifulSoup.
-        Check for:
-        - URL validation: crawl targets must be validated as `http`/`https` before
-          requests are made; flag any URL constructed from config without scheme check.
-        - Crawl scope must be bounded — verify the connector does not follow
-          off-domain links or exceed a configured depth/page limit.
-        - Rate limiting must apply to all outbound HTTP requests; flag any `requests`
-          call that bypasses the shared RateLimiter.
-        - BeautifulSoup parsing must use `html.parser` or `lxml`, never `html5lib`
-          with untrusted content unless explicitly reviewed for safety.
+        Model adapters must implement chat, embedding, or reranker boundaries.
+        Check provider-local capability profiles, optional dependency errors with
+        install hints, timeout/retry/rate-limit behavior, deterministic mock
+        outputs, and no provider SDK imports outside adapters. Raw provider
+        responses must not appear in default outputs except debug/raw diagnostic
+        fields.
 
-    - path: "packages/qdrant-loader/src/qdrant_loader/core/state/**"
+    - path: "packages/harborrag-adapters/src/harborrag_adapters/repositories/**"
       instructions: >
-        State management uses SQLAlchemy with connection pooling.
-        Check for:
-        - Every DB operation must be inside a transaction that is explicitly
-          committed or rolled back. Flag missing `session.rollback()` on exception
-          paths.
-        - Connection pool exhaustion: verify that all sessions are returned to the
-          pool (use context managers, not manual `session.close()`).
-        - Schema migrations: if a model field is added/removed, flag the missing
-          Alembic migration.
-        - No raw string SQL — all queries must use SQLAlchemy ORM or parameterised
-          text clauses. Flag any `text(f"... {variable}")` patterns.
+        This is the storage adapter layer. Use repositories/ naming, not stores/.
+        Base and mock implementations must live in each family folder: vector,
+        graph, cache, object_store, database, and state when added. Check
+        connection lifecycle, transaction boundaries, parameterized SQL, object
+        path traversal prevention, cache TTL semantics, vector namespace support,
+        graph relationship normalization, and missing optional dependency errors.
 
-    - path: "packages/qdrant-loader/src/qdrant_loader/core/pipeline/**"
+    - path: "packages/harborrag-adapters/src/harborrag_adapters/builder.py"
       instructions: >
-        Pipeline orchestrator and workers handle concurrent async processing.
-        Check for:
-        - Exception handling in workers must not silently swallow errors that
-          should fail the pipeline. Verify that worker exceptions propagate or
-          are surfaced in the run summary.
-        - Force flag (`--force`) bypasses change detection — flag any expansion
-          of its scope or new code that ignores the force flag unintentionally.
-        - Concurrency controls: verify that new workers respect the configured
-          concurrency limits and do not spawn unbounded tasks.
-        - Project context: verify null checks for `project_id` and `project_config`
-          before use in all pipeline stages.
+        The adapter builder is a composition helper, not an engine pipeline.
+        Check that it validates provider names, returns objects compatible with
+        core ports/base classes, and does not import engine/runtime/app/MCP.
+        If a new adapter family is introduced, require a registry entry, mock,
+        package-local tests, and README update.
 
-    - path: "packages/qdrant-loader/src/qdrant_loader/core/file_conversion/**"
+    - path: "packages/harborrag-engine/src/harborrag_engine/ingestion/**"
       instructions: >
-        File conversion uses MarkItDown with ffmpeg for audio, PDF parsing, Office docs.
-        Check for:
-        - All file handles and temp files must be closed/deleted in `finally` blocks
-          or via context managers — no path should leave orphaned temp files.
-        - Timeouts must be enforced for ffmpeg and external process calls.
-        - Large file guards: flag any conversion that reads the entire file into
-          memory without a size check.
-        - Malicious file content: MarkItDown processes arbitrary user files —
-          verify no shell expansion or eval of file content occurs.
-        - LLM API key in `to_dict()` / config dumps: the `llm_api_key` field must
-          be masked (e.g. `***`) in any serialisation used for logging or display.
+        Ingestion orchestrates connector -> parser -> normalization -> chunking
+        -> indexing through ports/base classes. It must not import concrete
+        provider SDKs or adapter clients directly. Check error propagation,
+        checkpoint semantics, duplicate handling, graph hint preservation,
+        object artifact writing boundaries, and that broad exceptions are either
+        converted to structured run errors or deliberately re-raised.
 
-    - path: "packages/qdrant-loader/src/qdrant_loader/config/**"
+    - path: "packages/harborrag-engine/src/harborrag_engine/retrieval/**"
       instructions: >
-        Pydantic V2 config models are the trust boundary for user input.
-        Check for:
-        - New fields must have explicit validators or constrained types (e.g.
-          `AnyHttpUrl`, `PositiveInt`, `constr(min_length=1)`).
-        - Any field that holds a secret (api_key, token, password) must use
-          `SecretStr` or be excluded from `model_dump()` / `__repr__`.
-        - YAML loading must use `yaml.safe_load()`, never `yaml.load()`.
-        - Environment variable expansion must not allow interpolation of one secret
-          into an unrelated field.
-        - Breaking config schema changes (renamed/removed fields) must include a
-          migration note or deprecation warning.
+        Retrieval owns query rewriting, vector/graph search orchestration, score
+        fusion, reranking, and context reconstruction. Check deterministic score
+        combination, stable ordering for equal scores, top_k handling, no hidden
+        provider dependencies, no mutation of input results unless documented,
+        and tests for empty, duplicate, tie-score, and low-score cases.
 
-    - path: "packages/qdrant-loader-mcp-server/**"
+    - path: "packages/harborrag-engine/src/harborrag_engine/indexing/**"
       instructions: >
-        MCP server exposes semantic search via stdio and HTTP (FastAPI).
-        Check for:
-        - All FastAPI route handlers must validate input with Pydantic models —
-          no raw `request.body()` parsing.
-        - Errors returned to MCP clients must not include internal stack traces
-          or credential values.
-        - Async route handlers must not block the event loop with synchronous I/O.
-        - Any new MCP tool must be registered in the tool registry and have a
-          corresponding integration test.
-        - HTTP transport: verify CORS settings are not overly permissive for
-          production deployments.
+        Indexing should coordinate embedding and repository writes through ports.
+        Check batch-size handling, partial-failure reporting, idempotency,
+        namespace/tenant propagation, and no direct vector DB client imports.
+        New indexers must include mock tests with empty, single-item, and batch
+        cases.
 
-    - path: "packages/qdrant-loader-core/**"
+    - path: "packages/harborrag-engine/src/harborrag_engine/graph/**"
       instructions: >
-        Core LLM abstraction used by both qdrant-loader and mcp-server.
-        Check for:
-        - New LLM providers must implement the full `LLMProvider` interface —
-          flag missing method implementations.
-        - Rate limiting and retry logic must be consistent across providers.
-        - Token counting must account for the correct model's context window;
-          flag hardcoded token limits.
-        - Dependencies added here affect all downstream packages — flag any
-          new dependency that is not strictly necessary.
+        Graph engine code should map GraphHint/domain relationships to graph
+        repository operations. Check relationship direction, stable node IDs,
+        duplicate edge behavior, confidence propagation, and no Cypher/AQL string
+        construction inside engine code unless explicitly delegated to a graph
+        repository adapter.
+
+    - path: "packages/harborrag-runtime/src/harborrag_runtime/**"
+      instructions: >
+        Runtime owns process boundaries, jobs, schedules, supervisors, and future
+        Temporal integration. It must not contain domain-specific ingestion or
+        retrieval business logic. Check bounded worker counts, job-state
+        transitions, cancellation, retry policy, schedule persistence, and no
+        blocking I/O inside future async workers. Temporal placeholders should
+        remain optional and must not become required imports for local runtime.
+
+    - path: "packages/harborrag-app/src/harborrag_app/api/**"
+      instructions: >
+        API code is the external HTTP boundary. When FastAPI or another framework
+        is added, route handlers must validate inputs with explicit request
+        schemas, return stable error envelopes, avoid leaking stack traces or
+        secrets, and call runtime/engine service facades rather than raw adapters.
+        Any new route needs package-local tests under packages/harborrag-app/tests.
+
+    - path: "packages/harborrag-app/src/harborrag_app/cli/**"
+      instructions: >
+        CLI commands must support JSON output for automation, deterministic exit
+        codes, sanitized errors, and no stack traces unless an explicit debug flag
+        is set. Check that command implementations call app/runtime services, not
+        raw adapters, and that new commands update README and tests.
+
+    - path: "packages/harborrag-app/src/harborrag_app/services/**"
+      instructions: >
+        App services adapt external API/CLI calls into runtime operations. They
+        should not embed connector/parser/model/repository logic. Check stable
+        response DTOs, structured diagnostics, and no raw provider response leak
+        in normal output.
+
+    - path: "packages/harborrag-mcp/src/harborrag_mcp/**"
+      instructions: >
+        MCP exposes an audited service-only facade for agents. Tools must have
+        explicit input/output schemas, capability budgets, sanitized errors, and
+        audit entries. Do not expose raw vector DB, graph DB, cache, object store,
+        or SQL execution tools directly. Any new tool must include a mock server
+        test and must call app/runtime services through a safe boundary.
+
+    - path: "packages/harborrag*/tests/**"
+      instructions: >
+        Every package owns its own tests. New base classes require abstract/base
+        behavior tests; new mocks require deterministic behavior tests; new
+        providers require fake-client tests and optional integration tests. Avoid
+        brittle sleep-based tests. Keep coverage at or above 95% for the repo.
+
+    - path: "tests/**"
+      instructions: >
+        Root tests should cover cross-package behavior: import smoke tests,
+        dependency-direction rules, CLI smoke, and integration contracts. Do not
+        duplicate package-local unit tests here. If a cross-package rule changes,
+        explain why in the PR description.
+
+    - path: "scripts/**"
+      instructions: >
+        Scripts must be safe for local developer use. Check repo-root discovery,
+        no shell=True with user input, helpful JSON output where relevant,
+        deterministic exit codes, and no writes outside the repository unless an
+        explicit output path is provided and validated.
 
     - path: ".github/workflows/**"
       instructions: >
-        Check for:
-        - Secrets must only be injected into jobs that require them; flag any
-          `${{ secrets.* }}` exposure in steps that run on fork PRs.
-        - `pull_request_target` triggers must be audited carefully for injection
-          risk — prefer `pull_request` for untrusted code.
-        - Pinned action versions (`uses: actions/checkout@v4`) are good; flag
-          any unpinned `@main` or `@master` references.
-        - New jobs should use concurrency groups to cancel stale runs.
+        Check GitHub Actions for least-privilege permissions, pinned action
+        versions, no pull_request_target for untrusted code, no secrets exposed
+        to fork PRs, concurrency groups for long jobs, Python 3.12 consistency,
+        and commands matching Makefile/pyproject configuration.
 
     - path: "pyproject.toml"
       instructions: >
-        Check for:
-        - New dependencies should have a minimum version pin.
-        - Dev-only dependencies must not appear in the main `[project.dependencies]`.
-        - Version bumps in `[project]` must be consistent across all three packages
-          if it is a coordinated release.
+        Root pyproject is the workspace/tooling source of truth. Check Python
+        requires-python is >=3.12, uv workspace members include every package,
+        dev/docs dependencies are not placed in main dependencies, coverage omit
+        excludes tests/build artifacts, Ruff/Black/isort/mypy agree on Python
+        version and line length, and pytest discovers package-local tests.
+
+    - path: "packages/*/pyproject.toml"
+      instructions: >
+        Package pyproject files must use Python >=3.12 and declare only required
+        runtime dependencies. Do not add provider SDK dependencies to core. Keep
+        optional provider dependencies in adapter extras. Package names should
+        match workspace membership and README ownership.
+
+    - path: "README.md"
+      instructions: >
+        Root README should onboard open-source contributors. Check that package
+        map, quickstart commands, current status, testing instructions, and
+        architecture boundaries match the actual repository structure. Avoid
+        claiming implemented providers that are only TODO/mock placeholders.
+
+    - path: "packages/*/README.md"
+      instructions: >
+        Package README files should explain ownership, public API, base/mock
+        files, teammate deliverables, and boundary rules for that package. Flag
+        outdated paths such as stores/ if the code uses repositories/.
 
   pre_merge_checks:
+    title:
+      mode: warning
+      requirements: >
+        PR title should follow Conventional Commits: type(scope): description.
+        Valid types: feat, fix, refactor, perf, test, docs, ci, chore.
+    description:
+      mode: warning
+    docstrings:
+      mode: warning
+      threshold: 60
     custom_checks:
-      - name: "No hardcoded secrets or tokens"
+      - name: "No core upward imports"
+        mode: error
         instructions: >
-          Fail if any hardcoded API key, token, password, or secret appears in
-          non-test source code. Look for patterns like `api_key = "sk-..."`,
-          `token = "ghp_..."`, `password = "..."`, or any string resembling a
-          credential assigned to a variable.
+          Fail if any file under packages/harborrag-core/src imports
+          harborrag_adapters, harborrag_engine, harborrag_runtime,
+          harborrag_app, harborrag_mcp, or harborrag. Core must remain pure.
 
-      - name: "Async context managers on all connectors"
+      - name: "Mock and tests for new base"
+        mode: error
         instructions: >
-          Fail if a connector class that inherits from BaseConnector does not
-          implement `__aenter__` and `__aexit__`, or if connector instances are
-          used without `async with` in the calling code.
+          Fail if a new base.py or abstract class is added under any package
+          without a corresponding mock.py in the same feature folder and a
+          package-local test under that package's tests/ directory.
 
-      - name: "No bare except in connector or pipeline code"
+      - name: "Repositories naming only"
+        mode: error
         instructions: >
-          Fail if `except:` or `except Exception:` appears in any file under
-          `connectors/` or `core/pipeline/` without a specific comment explaining
-          why a broad catch is intentional.
+          Fail if new adapter storage code uses a stores/ path or store module
+          naming for the adapter package. The project convention is
+          harborrag_adapters/repositories/ with vector, graph, cache,
+          object_store, database, and state families.
 
-      - name: "SecretStr for credential fields"
+      - name: "No hardcoded credentials"
+        mode: error
         instructions: >
-          Fail if a new Pydantic model field whose name contains 'key', 'token',
-          'password', 'secret', or 'credential' uses a plain `str` type instead
-          of `pydantic.SecretStr`.
+          Fail if any hardcoded API key, token, password, secret, credential,
+          Authorization header, GitHub token, OpenAI key, cloud key, database
+          password, or bearer token appears in non-test source code.
 
-      - name: "Tests exist for new connectors"
+      - name: "Provider deps stay in adapters"
+        mode: error
         instructions: >
-          Fail if a new connector module is added under `connectors/` but no
-          corresponding test file exists under `tests/unit/connectors/` or
-          `tests/integration/connectors/`.
+          Fail if provider SDK imports such as qdrant_client, neo4j, redis,
+          boto3, pymongo, openai, anthropic, docling, paddleocr, or requests
+          are added outside harborrag-adapters or clearly optional integration
+          test code.
+
+      - name: "Package-local tests required"
+        mode: error
+        instructions: >
+          Fail if production code changes under packages/<name>/src but no
+          package-local test changes appear under packages/<name>/tests, unless
+          the PR explicitly explains why tests are not needed.
+
+      - name: "Coverage gate preserved"
+        mode: warning
+        instructions: >
+          Warn if pyproject.toml or CI lowers the coverage fail_under value below
+          95 or stops running package-local tests.
 
   tools:
     ruff:
@@ -267,12 +346,71 @@ reviews:
       enabled: true
     trufflehog:
       enabled: true
+    gitleaks:
+      enabled: true
     yamllint:
       enabled: true
     actionlint:
       enabled: true
+    zizmor:
+      enabled: true
     hadolint:
       enabled: true
+    shellcheck:
+      enabled: true
+    checkmake:
+      enabled: true
+    markdownlint:
+      enabled: true
+    github-checks:
+      enabled: true
+      timeout_ms: 900000
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: true
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - "TEST_TUTORIAL.md"
+      - "packages/*/README.md"
+      - "**/AGENTS.md"
+      - ".github/copilot-instructions.md"
+  learnings:
+    scope: local
+    approval_delay: 7
+  issues:
+    scope: local
+  pull_requests:
+    scope: local
+
+code_generation:
+  docstrings:
+    language: "en-US"
+    path_instructions:
+      - path: "packages/harborrag-core/src/harborrag_core/**"
+        instructions: >
+          Generate docstrings only when they clarify public contracts or tricky
+          invariants. Keep them concise and avoid restating type annotations.
+      - path: "packages/harborrag-adapters/src/harborrag_adapters/**"
+        instructions: >
+          Mention provider lifecycle expectations, optional dependency behavior,
+          and whether the class is a base, mock, or real adapter.
+  unit_tests:
+    path_instructions:
+      - path: "packages/*/src/**"
+        instructions: >
+          Add package-local tests under the matching packages/<name>/tests
+          directory. Cover happy path, empty input, error path, and boundary rule.
 
 chat:
   auto_reply: true
+  integrations:
+    jira:
+      usage: auto
+    linear:
+      usage: auto

@@ -1,0 +1,40 @@
+name: harborrag-prod
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.api
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      HARBORRAG_ENV: prod
+      HARBORRAG_QDRANT_URL: http://qdrant:6333
+      HARBORRAG_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      - qdrant
+      - redis
+    volumes:
+      - harbor_prod_state:/app/.harbor
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes:
+      - qdrant_prod_data:/qdrant/storage
+      - ../qdrant/config.yaml:/qdrant/config/config.yaml:ro
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_prod_data:/data
+
+volumes:
+  harbor_prod_state:
+  qdrant_prod_data:
+  redis_prod_data:

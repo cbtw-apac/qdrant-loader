@@ -1,0 +1,1 @@
+from harborrag_adapters.models.embedding.base import BaseEmbeddingModel

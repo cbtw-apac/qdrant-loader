@@ -1,0 +1,55 @@
+name: harborrag
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.api
+    env_file:
+      - ../../.env
+    environment:
+      HARBORRAG_ENV: ${HARBORRAG_ENV:-dev}
+      HARBORRAG_QDRANT_URL: http://qdrant:6333
+      HARBORRAG_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_started
+    volumes:
+      - ../../examples:/app/examples:ro
+      - harbor_state:/app/.harbor
+
+  cli:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.cli
+    env_file:
+      - ../../.env
+    profiles: ["cli"]
+    volumes:
+      - ../../examples:/app/examples:ro
+      - harbor_state:/app/.harbor
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ../qdrant/config.yaml:/qdrant/config/config.yaml:ro
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  harbor_state:
+  qdrant_data:
+  redis_data:

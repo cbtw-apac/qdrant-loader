@@ -1,135 +1,26 @@
-# MCP Server Guide
+# MCP Mock Tools
 
-The QDrant Loader MCP (Model Context Protocol) Server enables seamless integration with AI development tools like Cursor IDE, Windsurf, and Claude Desktop. This guide covers everything you need to know about setting up and using our **intelligent search system**.
+`harborrag-mcp` exposes the [Model Context Protocol](https://modelcontextprotocol.io/) as an audited tool facade. Today it ships two deterministic mock tools; there is no hybrid search, hierarchy navigation, or attachment analysis implemented yet.
 
-## 🎯 Overview
+## Tools
 
-The MCP Server acts as a bridge between your AI tools and your QDrant Loader knowledge base, providing **intelligent search capabilities** that go beyond simple keyword matching. Our system includes semantic understanding, hierarchy navigation, attachment analysis, and cross-document intelligence.
+Defined in `packages/harborrag-mcp/src/harborrag_mcp/tools/mock.py`:
 
-**Model Context Protocol (MCP)** is an open standard that allows AI applications to securely connect to external data sources. It enables your AI tools to access and search your knowledge base in real-time.
+| Tool | Input schema | Returns |
+|---|---|---|
+| `harbor_health_check` | `{"type": "object"}` | `{"ok": true, "diagnostics": {...}}` — the same diagnostics as `harbor doctor`. |
+| `harbor_sample_retrieve` | `{"query": string}` | `{"ok": true, "results": [...]}` — results from a fixed, single-entry `MockRetrievalPipeline` scored by term overlap. |
 
-### What MCP gives you
+Each tool declares an `McpToolSpec(name, description, input_schema)` and implements `call(arguments)`; `MockMcpServer` (`server/mock.py`) dispatches `call_tool(name, arguments)` to whichever tool's spec name matches, raising `ValueError` for an unknown tool name.
 
-- Semantic search in your ingested knowledge base
-- Hierarchy-aware retrieval for structured docs
-- Attachment-focused search
-- Integration with Cursor, Windsurf, Claude Desktop, and other MCP clients
+## Policy and audit
 
-### Key Capabilities
+- `harborrag_mcp.policy.McpToolPolicy` — `max_results` (default 20) and `allow_ingestion` (default `False`); `check_results(count)` raises if a tool tries to return more than the budget.
+- `harborrag_mcp.audit.McpAuditLog` — `record(tool)` appends an entry; nothing calls it automatically yet, so a real tool implementation should call it before returning results.
 
-- **Enhanced Semantic Search** - AI-powered similarity search with context understanding
-- **Hierarchy-Aware Navigation** - Structure-aware search with document relationships
-- **Intelligent Attachment Search** - File and document search with content analysis
-- **Cross-Document Intelligence** - Relationship analysis, conflict detection, and clustering
-- **Real-Time Integration** - Live access from your AI development environment
-- **Multi-Source Support** - Works with Git, Confluence, JIRA, and local files
+Neither is currently wired into `MockMcpServer.call_tool()` — enforcing them end to end is part of implementing a real MCP tool (see [Extending HarborRAG](../../../developers/extending/README.md#app-and-mcp-surfaces)).
 
-## ⚙️ Client configuration links
+## Related
 
-- Cursor, Windsurf, Claude Desktop setup: [Setup & Integration Guide](./setup-and-integration.md)
-- Search tool capabilities and parameters: [Search Capabilities & Examples](./search-capabilities.md)
-- Attachment-specific search details: [Attachment Search Guide](./attachment-search.md)
-- Hierarchy-specific search details: [Hierarchy Search Guide](./hierarchy-search.md)
-- Install and platform notes: [Installation Guide](../../../getting-started/installation.md)
-
-## 🎯 Prerequisites
-
-- Ingestion completed at least once with `qdrant-loader ingest`
-- QDrant reachable from your MCP runtime
-- LLM provider configured
-
-Configuration references:
-
-- **[LLM Provider Guide](../../configuration/llm-provider-guide.md)** - Provider-specific setup for embeddings/chat compatibility with MCP.
-- **[Environment Variables Reference](../../configuration/environment-variables.md)** - Required runtime variables for authentication, logging, and server behavior.
-
-## ⚡ Quick run
-
-```bash
-mcp-qdrant-loader
-```
-
-For production transport and worker tuning, use [Setup & Integration Guide](./setup-and-integration.md).
-
-## 🔍 Multi-Tool Search Strategies
-
-### Complete feature investigation
-
-1. Start with **Semantic Search** to understand the topic.
-2. Use **Hierarchy Search** to explore document structure.
-3. Apply **Relationship Analysis** to map dependencies.
-4. Use **Conflict Detection** to identify inconsistencies.
-
-### Documentation quality audit
-
-1. Use **Hierarchy Search** for structure and gap analysis.
-2. Use **Conflict Detection** for inconsistency checks.
-3. Use **Similarity Detection** to review duplication.
-4. Use **Complementary Content** to assess completeness.
-
-### Implementation planning
-
-1. Use **Semantic Search** for patterns and examples.
-2. Use **Complementary Content** for supporting references.
-3. Use **Relationship Analysis** for dependency understanding.
-4. Use **Clustering** to organize related materials.
-
-## 🚀 Performance Optimization
-
-### Search efficiency
-
-- Use specific queries instead of broad terms.
-- Apply source/type filters when appropriate.
-- Use practical limits for cross-document analysis.
-
-### Result quality
-
-- Provide context in your query.
-- Prefer natural language for semantic retrieval.
-- Combine tools to improve coverage and precision.
-
-## 🔍 Quick validation
-
-In Cursor/Claude/Windsurf, ask a simple query like:
-
-"Find setup notes for QDrant Loader in my ingested docs"
-
-If the tool returns results from your indexed content, MCP integration is working.
-
-## 🧪 Integration Checklist
-
-### Setup requirements
-
-- [ ] **QDrant Loader** installed and configured
-- [ ] **Documents ingested** into QDrant
-- [ ] **MCP server package** installed
-- [ ] **AI tool** with MCP support (Cursor/Windsurf/Claude)
-- [ ] **LLM API key** configured
-
-### Configuration
-
-- [ ] MCP server added to client config
-- [ ] Environment variables set correctly
-- [ ] Collection name matches ingested content
-- [ ] Connection verified from AI tool
-
-### Functionality testing
-
-- [ ] Basic semantic search works
-- [ ] Hierarchy search navigates structure
-- [ ] Attachment search returns expected files
-- [ ] Cross-document analysis returns relationships
-- [ ] Performance is acceptable for daily usage
-
-### Team deployment
-
-- [ ] Configuration standardized across team
-- [ ] Best practices documented and shared
-- [ ] Security considerations reviewed
-- [ ] Troubleshooting procedures documented
-
-## 🔧 Troubleshooting paths
-
-- MCP setup/runtime issues: [Setup & Integration Guide](./setup-and-integration.md)
-- Search behavior and tool semantics: [Search Capabilities & Examples](./search-capabilities.md)
-- General configuration issues: [Troubleshooting Guide](../../troubleshooting/)
+- [Setup & Integration](setup-and-integration.md) — calling these tools from Python or wiring an MCP client.
+- [Architecture Overview](../../../developers/architecture/README.md#harborrag-mcp-audited-agent-tools) — how `harborrag-mcp` fits into the package structure.

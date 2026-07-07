@@ -1,266 +1,288 @@
-# QDrant Loader
+# HarborRAG
 
-[![PyPI - qdrant-loader](https://img.shields.io/pypi/v/qdrant-loader?label=qdrant-loader)](https://pypi.org/project/qdrant-loader/)
-[![PyPI - mcp-server](https://img.shields.io/pypi/v/qdrant-loader-mcp-server?label=mcp-server)](https://pypi.org/project/qdrant-loader-mcp-server/)
-[![PyPI - qdrant-loader-core](https://img.shields.io/pypi/v/qdrant-loader-core?label=qdrant-loader-core)](https://pypi.org/project/qdrant-loader-core/)
-![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/martin-papy/qdrant-loader?labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
-[![Test Coverage](https://img.shields.io/badge/coverage-view%20reports-blue)](https://qdrant-loader.net/coverage/)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+HarborRAG is a modular, provider-agnostic Retrieval-Augmented Generation framework for engineering knowledge. It is designed around clear package boundaries: **core** defines stable contracts, **adapters** implement providers, **engine** orchestrates ingestion/retrieval, **runtime** owns jobs and scheduling, **app** exposes CLI/API surfaces, and **MCP** exposes audited agent tools.
 
-📝 **[Changelog v1.0.3](./CHANGELOG.md)** - Latest improvements and bug fixes
+> Status: framework foundation. This repository currently provides abstract base classes, protocol contracts, package-local mock implementations, tests, and scripts so teammates can implement real providers without breaking architecture boundaries.
 
-<div align="left">
-A comprehensive toolkit for loading data into Qdrant vector database with advanced MCP server support for AI-powered development workflows.
-</div>
+## Why HarborRAG?
 
-## 🎯 What is QDrant Loader?
+Engineering RAG is not only “put files into a vector database.” A production system needs:
 
-QDrant Loader is a data ingestion and retrieval system that collects content from multiple sources, processes and vectorizes it, then provides intelligent search capabilities through a Model Context Protocol (MCP) server for AI development tools.
+- connectors for sources such as GitHub, Jira, Confluence, local files, and web content;
+- parsers for text, Office documents, PDFs, OCR-heavy files, and structured layouts;
+- model adapters for chat, embedding, and reranking providers;
+- repositories for vector, graph, cache, object, database, and state storage;
+- ingestion and retrieval pipelines that remain independent from provider SDKs;
+- runtime services for jobs, supervisors, schedules, and future durable workflows;
+- API/CLI/MCP surfaces that expose safe operations instead of raw provider access.
 
-**Perfect for:**
+HarborRAG uses a ports-and-adapters layout so each of these responsibilities can evolve independently.
 
-- 🤖 **AI-powered development** with Cursor, Windsurf, and other MCP-compatible tools
-- 📚 **Knowledge base creation** from technical documentation
-- 🔍 **Intelligent code assistance** with contextual information
-- 🏢 **Enterprise content integration** from multiple data sources
+## Requirements
 
-## 📦 Packages
-
-This monorepo contains three complementary packages:
-
-### 🔄 [QDrant Loader](./packages/qdrant-loader/)
-
-Data ingestion and processing engine
-
-Collects and vectorizes content from multiple sources into QDrant vector database.
-
-**Key Features:**
-
-- **Multi-source connectors**: Git, Confluence (Cloud & Data Center), JIRA (Cloud & Data Center), Public Docs, Local Files
-- **File conversion**: PDF, Office docs (Word, Excel, PowerPoint), images, audio, EPUB, ZIP, and more using MarkItDown
-- **Smart chunking**: Modular chunking strategies with intelligent document processing and hierarchical context
-- **Incremental updates**: Change detection and efficient synchronization
-- **Multi-project support**: Organize sources into projects with shared collections
-- **Provider-agnostic LLM**: OpenAI, Azure OpenAI, Ollama, and custom endpoints with unified configuration
-
-### ⚙️ [QDrant Loader Core](./packages/qdrant-loader-core/)
-
-Core library and LLM abstraction layer
-
-Provides the foundational components and provider-agnostic LLM interface used by other packages.
-
-**Key Features:**
-
-- **LLM Provider Abstraction**: Unified interface for OpenAI, Azure OpenAI, Ollama, and custom endpoints
-- **Configuration Management**: Centralized settings and validation for LLM providers
-- **Rate Limiting**: Built-in rate limiting and request management
-- **Error Handling**: Robust error handling and retry mechanisms
-- **Logging**: Structured logging with configurable levels
-
-### 🔌 [QDrant Loader MCP Server](./packages/qdrant-loader-mcp-server/)
-
-AI development integration layer
-
-Model Context Protocol server providing search capabilities to AI development tools.
-
-**Key Features:**
-
-- **MCP Protocol 2025-06-18**: Latest protocol compliance with dual transport support (stdio + HTTP)
-- **Advanced search tools**: Semantic search, hierarchy-aware search, attachment discovery, and conflict detection
-- **Cross-document intelligence**: Document similarity, clustering, relationship analysis, and knowledge graphs
-- **Streaming capabilities**: Server-Sent Events (SSE) for real-time search results
-- **Production-ready**: HTTP transport with security, session management, and health checks
-
-## 🚀 Quick Start
-
-### Installation
-
-```bash
-# Install both packages
-pip install qdrant-loader qdrant-loader-mcp-server
-
-# Or install individually
-pip install qdrant-loader          # Data ingestion only
-pip install qdrant-loader-mcp-server  # MCP server only
+```text
+Python >= 3.12
 ```
 
-### 5-Minute Setup
+The workspace is configured with `pyproject.toml`, package-local `src/` layouts, and `uv` workspace members.
 
-1. **Create a workspace**
+## Package map
 
-   ```bash
-   mkdir my-workspace && cd my-workspace
-   ```
+```text
+packages/
+  harborrag-core/      contracts, domain models, ports, execution, security
+  harborrag-adapters/  connectors, parsers, models, repositories, mocks
+  harborrag-engine/    ingestion, retrieval, indexing, graph orchestration
+  harborrag-runtime/   jobs, supervision, scheduling, runtime services
+  harborrag-app/       application service, API controller, CLI command boundary
+  harborrag-mcp/       MCP tools/server facade with policy and audit boundaries
+  harborrag/           future public facade / meta-package
+```
 
-2. **Initialize workspace with templates**
+## Structure rules
 
-   ```bash
-   qdrant-loader init --workspace .
-   ```
+1. Base classes and mocks live inside the matching feature folder.
+2. Storage implementations are called `repositories`, not `stores`.
+3. `harborrag-core` must not import adapters, engine, runtime, app, MCP, or the meta-package.
+4. Engine code depends on core ports/contracts, not provider SDKs.
+5. Runtime coordinates jobs and services; it does not contain ingestion/retrieval business logic.
+6. App and MCP call service-level facades; they do not call raw provider clients directly.
+7. TODO comments must tell the next implementer exactly what to build next.
 
-3. **Configure your environment** (edit `.env`)
+## Current skeleton examples
 
-   ```bash
-   # Qdrant connection
-   QDRANT_URL=http://localhost:6333
-   QDRANT_COLLECTION_NAME=my_docs
+```text
+harborrag_adapters/
+  connectors/base.py
+  connectors/mock.py
+  parsers/base.py
+  parsers/mock.py
+  models/chat/base.py
+  models/chat/mock.py
+  models/embedding/base.py
+  models/embedding/mock.py
+  models/reranker/base.py
+  models/reranker/mock.py
+  repositories/vector/base.py
+  repositories/vector/mock.py
+  repositories/graph/base.py
+  repositories/graph/mock.py
+  repositories/cache/base.py
+  repositories/cache/mock.py
+  repositories/object_store/base.py
+  repositories/object_store/mock.py
+  repositories/database/base.py
+  repositories/database/mock.py
+```
 
-   # LLM provider (new unified configuration)
-   OPENAI_API_KEY=your_openai_key
-   LLM_PROVIDER=openai
-   LLM_BASE_URL=https://api.openai.com/v1
-   LLM_EMBEDDING_MODEL=text-embedding-3-small
-   LLM_CHAT_MODEL=gpt-4o-mini
-   ```
+Engine, runtime, app, and MCP follow the same rule:
 
-4. **Configure data sources** (edit `config.yaml`)
+```text
+harborrag_engine/ingestion/base.py     harborrag_engine/ingestion/mock.py
+harborrag_runtime/jobs/base.py         harborrag_runtime/jobs/mock.py
+harborrag_app/services/base.py         harborrag_app/services/mock.py
+harborrag_mcp/tools/base.py            harborrag_mcp/tools/mock.py
+```
 
-   ```yaml
-   global:
-     qdrant:
-       url: "http://localhost:6333"
-       collection_name: "my_docs"
-     llm:
-       provider: "openai"
-       base_url: "https://api.openai.com/v1"
-       api_key: "${OPENAI_API_KEY}"
-       models:
-         embeddings: "text-embedding-3-small"
-         chat: "gpt-4o-mini"
-       embeddings:
-         vector_size: 1536
+## Quick start
 
-   projects:
-     my-project:
-       project_id: "my-project"
-       sources:
-         git:
-           docs-repo:
-             base_url: "https://github.com/your-org/your-repo.git"
-             branch: "main"
-             file_types: ["*.md", "*.rst"]
-   ```
+### Option A — pip editable install
 
-5. **Load your data**
+```bash
+python -m pip install -e packages/harborrag-core
+python -m pip install -e packages/harborrag-adapters
+python -m pip install -e packages/harborrag-engine
+python -m pip install -e packages/harborrag-runtime
+python -m pip install -e packages/harborrag-app
+python -m pip install -e packages/harborrag-mcp
+python -m pip install -e packages/harborrag
+python -m pip install -e ".[dev]"
+```
 
-   ```bash
-   qdrant-loader ingest --workspace .
-   ```
+### Option B — uv workspace
 
-6. **Start the MCP server**
+```bash
+uv sync --all-packages --extra dev
+uv run pytest
+```
 
-   ```bash
-   mcp-qdrant-loader --env /path/tp/your/.env
-   ```
+## Run the mock pipeline
 
-## 🔧 MCP-Compatible IDE Setup
+```bash
+python scripts/run_mock_pipeline.py --json
+```
 
-QDrant Loader works with any IDE/tool that supports MCP, including Cursor, Windsurf, and Claude Desktop.
-
-Minimal MCP server entry (adapt path/format to your tool):
+Expected shape:
 
 ```json
 {
-  "mcpServers": {
-    "qdrant-loader": {
-      "command": "/path/to/venv/bin/mcp-qdrant-loader",
-      "env": {
-        "QDRANT_URL": "http://localhost:6333",
-        "QDRANT_COLLECTION_NAME": "my_docs",
-        "OPENAI_API_KEY": "your_key"
-      }
-    }
-  }
+  "documents": [...],
+  "chunks": [...],
+  "retrieval": [...]
 }
 ```
 
-**Alternative: Use configuration file** (recommended for complex setups):
-
-```json
-{
-  "mcpServers": {
-    "qdrant-loader": {
-      "command": "/path/to/venv/bin/mcp-qdrant-loader",
-      "args": [
-        "--config",
-        "/path/to/your/config.yaml",
-        "--env",
-        "/path/to/your/.env"
-      ]
-    }
-  }
-}
-```
-
-For tool-specific setup and exact config format:
-
-- **[MCP Setup and Integration](./docs/users/detailed-guides/mcp-server/setup-and-integration.md)** - Full guide
-- **[Cursor Setup](./docs/users/detailed-guides/mcp-server/setup-and-integration.md#-cursor-ide)**
-- **[Windsurf Setup](./docs/users/detailed-guides/mcp-server/setup-and-integration.md#-windsurf)**
-- **[Claude Desktop Setup](./docs/users/detailed-guides/mcp-server/setup-and-integration.md#-claude-desktop)**
-
-**Example queries in AI tools:**
-
-- _"Find documentation about authentication in our API"_
-- _"Show me examples of error handling patterns"_
-- _"What are the deployment requirements for this service?"_
-- _"Find all attachments related to database schema"_
-
-## 📚 Documentation
-
-### Getting Started
-
-- **[Getting Started](./docs/getting-started/)** - Quick start and core concepts
-- **[Installation Guide](./docs/getting-started/installation.md)** - Complete setup instructions
-- **[Quick Start](./docs/getting-started/quick-start.md)** - Step-by-step tutorial
-- **[Core Concepts](./docs/getting-started/README.md#-core-concepts)** - Understand the core architecture: workspace model, projects and sources, ingestion pipeline, and MCP search flow
-
-### User Guides
-
-- **[User Guides](./docs/users/)** - Detailed usage instructions
-- **[Configuration](./docs/users/configuration/)** - Complete configuration reference
-- **[Data Sources](./docs/users/detailed-guides/data-sources/)** - Git, Confluence, JIRA setup
-- **[File Conversion](./docs/users/detailed-guides/file-conversion/)** - File processing capabilities
-- **[MCP Server](./docs/users/detailed-guides/mcp-server/)** - AI tool integration
-
-## 🛠️ Developer Resources
-
-- **[Developer hub](./docs/developers)** - Developer guides for architecture, testing, deployment, and contribution workflows.
-- **[Architecture](./docs/developers/architecture/)** - System design overview
-- **[Testing](./docs/developers/testing/)** - Testing guide and best practices
-
-## 🆘 Support
-
-- **[Issues](https://github.com/martin-papy/qdrant-loader/issues)** - Bug reports and feature requests
-- **[Discussions](https://github.com/martin-papy/qdrant-loader/discussions)** - Community Q&A
-
-## 🤝 Contributing
-
-We welcome contributions! See our [Contributing Guide](./CONTRIBUTING.md) for:
-
-- Development environment setup
-- Code style and standards
-- Pull request process
-
-### Quick Development Setup
+## CLI
 
 ```bash
-# Clone and setup
-git clone https://github.com/martin-papy/qdrant-loader.git
-cd qdrant-loader
-
-# Sync workspace environment (recommended)
-uv sync --all-packages --all-extras
-
-# Add a new dependency during development
-uv add fastapi
-uv sync
+python -m harborrag_app.cli.main doctor --json
+python -m harborrag_app.cli.main sample-ingest --json
 ```
 
-## 📄 License
+## MCP mock tools
 
-This project is licensed under the GNU GPLv3 - see the [LICENSE](LICENSE) file for details.
+```python
+from harborrag_mcp.server import call_tool
 
----
+print(call_tool("harbor_health_check"))
+print(call_tool("harbor_sample_retrieve", {"query": "HarborRAG"}))
+```
 
-**Ready to get started?** Check out our [Quick Start Guide](./docs/getting-started/quick-start.md) or browse the [complete documentation](./docs/).
+## Tests
+
+Every package owns its own `tests/` folder:
+
+```text
+packages/harborrag-core/tests/
+packages/harborrag-adapters/tests/
+packages/harborrag-engine/tests/
+packages/harborrag-runtime/tests/
+packages/harborrag-app/tests/
+packages/harborrag-mcp/tests/
+packages/harborrag/tests/
+```
+
+Run all tests:
+
+```bash
+pytest
+pytest --cov --cov-report=term-missing
+```
+
+Run one package:
+
+```bash
+make test-package PACKAGE=harborrag-core
+make test-package PACKAGE=harborrag-adapters
+make test-package PACKAGE=harborrag-engine
+```
+
+Coverage gate:
+
+```text
+95% minimum
+```
+
+## Makefile commands
+
+```bash
+make help
+make bootstrap
+make test
+make coverage
+make lint
+make format
+make typecheck
+make compile
+make doctor
+make mock-pipeline
+make deps-check
+make provider-matrix
+make clean
+```
+
+## How to implement real providers
+
+### Connector
+
+Create a provider folder under `harborrag_adapters/connectors/`:
+
+```text
+connectors/github/
+  __init__.py
+  client.py
+  connector.py
+  schemas.py
+  mock.py
+```
+
+Implementation requirements:
+
+- subclass `harborrag_adapters.connectors.base.BaseConnector`;
+- return core `SourceRecord` objects from `discover()`;
+- return core `RawDocument` objects from `load()`;
+- keep provider SDK imports out of `harborrag-core`;
+- add provider-local tests under `packages/harborrag-adapters/tests/`.
+
+### Parser
+
+Create a provider folder under `harborrag_adapters/parsers/`:
+
+```text
+parsers/pdf/docling_engine.py
+parsers/pdf/pypdf_engine.py
+parsers/office/docx_engine.py
+```
+
+Implementation requirements:
+
+- subclass `harborrag_adapters.parsers.base.BaseParser`;
+- return core `ParsedDocument` objects;
+- preserve layout/tables/page metadata when available;
+- return warnings instead of silently dropping partial parsing issues;
+- include a deterministic mock or fake-engine path for tests.
+
+### Repository
+
+Use `repositories/`, not `stores/`:
+
+```text
+repositories/vector/qdrant.py
+repositories/graph/neo4j.py
+repositories/cache/redis.py
+repositories/object_store/s3.py
+repositories/database/postgresql.py
+```
+
+Implementation requirements:
+
+- subclass the matching base class in the repository family;
+- keep raw provider responses out of public results by default;
+- expose capability metadata in the provider module;
+- add mock/fake-client tests for request/response normalization.
+
+## TODO comment style
+
+Use TODO comments as direct implementation instructions:
+
+```python
+# TODO(connectors/github): Implement pagination and rate-limit handling for GitHub REST responses.
+# TODO(parsers/pdf): Preserve table bounding boxes when the selected engine exposes layout coordinates.
+# TODO(repositories/vector): Normalize provider-specific scores into HarborRAG retrieval scores.
+```
+
+Avoid vague placeholders such as `TODO(later)` or `TODO(next)` because they do not tell the next implementer what to do.
+
+## Repository quality checks
+
+```bash
+make deps-check
+make compile
+make test
+make coverage
+```
+
+## Documentation files
+
+```text
+README.md              project overview and quickstart
+CONTRIBUTING.md        development workflow and PR rules
+SECURITY.md            vulnerability reporting and security expectations
+CODE_OF_CONDUCT.md     community behavior expectations
+CHANGELOG.md           release notes
+TEST_TUTORIAL.md       test and coverage guide
+```
+
+## License
+
+See [LICENSE](LICENSE).

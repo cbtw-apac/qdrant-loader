@@ -15,9 +15,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-core:
-    name: Test Core Package
+  test-packages:
+    name: Test ${{ matrix.package }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - harborrag-core
+          - harborrag-adapters
+          - harborrag-engine
+          - harborrag-runtime
+          - harborrag-app
+          - harborrag-mcp
+          - harborrag
     steps:
       - uses: actions/checkout@v6
 
@@ -31,320 +42,30 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-packages --all-extras
 
-      - name: Run core tests and generate coverage reports
+      - name: Run tests with coverage
         run: |
-          cd packages/qdrant-loader-core
-          uv run python -m pytest tests/ --cov=src -v
+          cd packages/${{ matrix.package }}
+          uv run python -m pytest tests/ --cov=src --cov-report=term-missing -v
 
       - name: Generate coverage reports
         if: |
           (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
           (github.event_name == 'push' && github.ref_name == 'main')
         run: |
-          cd packages/qdrant-loader-core
-          uv run coverage xml -o ../../coverage-core.xml
-          uv run coverage html -d ../../htmlcov-core
+          cd packages/${{ matrix.package }}
+          uv run coverage xml -o ../../coverage-${{ matrix.package }}.xml
+          uv run coverage html -d ../../htmlcov-${{ matrix.package }}
 
-      - name: Upload core coverage artifact
+      - name: Upload coverage artifact
         if: |
           (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
           (github.event_name == 'push' && github.ref_name == 'main')
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-core-${{ github.run_id }}
+          name: coverage-${{ matrix.package }}-${{ github.run_id }}
           path: |
-            htmlcov-core
-            coverage-core.xml
-          retention-days: 30
-
-  test-loader:
-    name: Test QDrant Loader
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.0.0
-        with:
-          python-version: '3.12'
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Install system dependencies
-        run: |
-          # Install ffmpeg for full MarkItDown audio processing capabilities
-          # This ensures comprehensive file conversion testing including audio files
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
-      - name: Install dependencies
-        run: uv sync --all-packages --all-extras
-
-      # Skip secret injection for fork PRs, Dependabot, and non-protected branches —
-      # secrets are only needed when integration tests run (develop/main).
-      - name: Create .env.test file for loader
-        if: |
-          (github.event_name == 'pull_request' &&
-            github.event.pull_request.head.repo.full_name == github.repository &&
-            github.actor != 'dependabot[bot]' &&
-            (github.event.pull_request.base.ref == 'develop' ||
-              github.event.pull_request.base.ref == 'main')) ||
-          (github.event_name == 'push' &&
-            (github.ref_name == 'develop' || github.ref_name == 'main'))
-        run: |
-          cd packages/qdrant-loader
-          cp tests/.env.test.template tests/.env.test
-
-          # Check if required secrets are set
-          if [ -z "${{ secrets.QDRANT_URL }}" ]; then
-            echo "Error: QDRANT_URL secret is not set"
-            exit 1
-          fi
-          if [ -z "${{ secrets.QDRANT_API_KEY }}" ]; then
-            echo "Error: QDRANT_API_KEY secret is not set"
-            exit 1
-          fi
-          if [ -z "${{ secrets.QDRANT_COLLECTION_NAME }}" ]; then
-            echo "Error: QDRANT_COLLECTION_NAME secret is not set"
-            exit 1
-          fi
-          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
-            echo "Error: OPENAI_API_KEY secret is not set"
-            exit 1
-          fi
-
-          # Replace environment variables with proper escaping
-          sed -i "s|QDRANT_URL=.*|QDRANT_URL=${{ secrets.QDRANT_URL }}|g" tests/.env.test
-          sed -i "s|QDRANT_API_KEY=.*|QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }}|g" tests/.env.test
-          sed -i "s|QDRANT_COLLECTION_NAME=.*|QDRANT_COLLECTION_NAME=${{ secrets.QDRANT_COLLECTION_NAME }}|g" tests/.env.test
-          sed -i "s|OPENAI_API_KEY=.*|OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}|g" tests/.env.test
-          sed -i "s|STATE_DB_PATH=.*|STATE_DB_PATH=:memory:|g" tests/.env.test
-
-          # Optional secrets - only replace if they exist
-          if [ -n "${{ secrets.REPO_TOKEN }}" ]; then
-            sed -i "s|REPO_TOKEN=.*|REPO_TOKEN=${{ secrets.REPO_TOKEN }}|g" tests/.env.test
-          fi
-          if [ -n "${{ secrets.REPO_URL }}" ]; then
-            sed -i "s|REPO_URL=.*|REPO_URL=${{ secrets.REPO_URL }}|g" tests/.env.test
-          fi
-          if [ -n "${{ secrets.CONFLUENCE_TOKEN }}" ]; then
-            sed -i "s|CONFLUENCE_TOKEN=.*|CONFLUENCE_TOKEN=${{ secrets.CONFLUENCE_TOKEN }}|g" tests/.env.test
-          fi
-          if [ -n "${{ secrets.CONFLUENCE_EMAIL }}" ]; then
-            sed -i "s|CONFLUENCE_EMAIL=.*|CONFLUENCE_EMAIL=${{ secrets.CONFLUENCE_EMAIL }}|g" tests/.env.test
-          fi
-          if [ -n "${{ secrets.CONFLUENCE_URL }}" ]; then
-            sed -i "s|CONFLUENCE_URL=.*|CONFLUENCE_URL=${{ secrets.CONFLUENCE_URL }}|g" tests/.env.test
-          fi
-          if [ -n "${{ secrets.CONFLUENCE_SPACE_KEY }}" ]; then
-            sed -i "s|CONFLUENCE_SPACE_KEY=.*|CONFLUENCE_SPACE_KEY=${{ secrets.CONFLUENCE_SPACE_KEY }}|g" tests/.env.test
-          fi
-          if [ -n "${{ secrets.JIRA_TOKEN }}" ]; then
-            sed -i "s|JIRA_TOKEN=.*|JIRA_TOKEN=${{ secrets.JIRA_TOKEN }}|g" tests/.env.test
-          fi
-          if [ -n "${{ secrets.JIRA_EMAIL }}" ]; then
-            sed -i "s|JIRA_EMAIL=.*|JIRA_EMAIL=${{ secrets.JIRA_EMAIL }}|g" tests/.env.test
-          fi
-          if [ -n "${{ secrets.JIRA_URL }}" ]; then
-            sed -i "s|JIRA_URL=.*|JIRA_URL=${{ secrets.JIRA_URL }}|g" tests/.env.test
-          fi
-          if [ -n "${{ secrets.JIRA_PROJECT_KEY }}" ]; then
-            sed -i "s|JIRA_PROJECT_KEY=.*|JIRA_PROJECT_KEY=${{ secrets.JIRA_PROJECT_KEY }}|g" tests/.env.test
-          fi
-
-          echo "Created .env.test file successfully"
-          echo "Contents (with secrets masked):"
-          sed 's/=.*/=***/' tests/.env.test
-
-      - name: Create config.test.yaml file for loader
-        if: |
-          (github.event_name == 'pull_request' &&
-            github.event.pull_request.head.repo.full_name == github.repository &&
-            github.actor != 'dependabot[bot]' &&
-            (github.event.pull_request.base.ref == 'develop' ||
-              github.event.pull_request.base.ref == 'main')) ||
-          (github.event_name == 'push' &&
-            (github.ref_name == 'develop' || github.ref_name == 'main'))
-        run: |
-          cd packages/qdrant-loader
-          cp tests/config.test.template.yaml tests/config.test.yaml
-
-          # Replace environment variables in YAML config
-          sed -i "s|\${QDRANT_URL}|${{ secrets.QDRANT_URL }}|g" tests/config.test.yaml
-          sed -i "s|\${QDRANT_API_KEY}|${{ secrets.QDRANT_API_KEY }}|g" tests/config.test.yaml
-          sed -i "s|\${QDRANT_COLLECTION_NAME}|${{ secrets.QDRANT_COLLECTION_NAME }}|g" tests/config.test.yaml
-
-          # Optional environment variables - only replace if they exist
-          if [ -n "${{ secrets.REPO_TOKEN }}" ]; then
-            sed -i "s|\${REPO_TOKEN}|${{ secrets.REPO_TOKEN }}|g" tests/config.test.yaml
-          fi
-          if [ -n "${{ secrets.REPO_URL }}" ]; then
-            sed -i "s|\${REPO_URL}|${{ secrets.REPO_URL }}|g" tests/config.test.yaml
-          fi
-          if [ -n "${{ secrets.CONFLUENCE_TOKEN }}" ]; then
-            sed -i "s|\${CONFLUENCE_TOKEN}|${{ secrets.CONFLUENCE_TOKEN }}|g" tests/config.test.yaml
-          fi
-          if [ -n "${{ secrets.CONFLUENCE_EMAIL }}" ]; then
-            sed -i "s|\${CONFLUENCE_EMAIL}|${{ secrets.CONFLUENCE_EMAIL }}|g" tests/config.test.yaml
-          fi
-          if [ -n "${{ secrets.CONFLUENCE_URL }}" ]; then
-            sed -i "s|\${CONFLUENCE_URL}|${{ secrets.CONFLUENCE_URL }}|g" tests/config.test.yaml
-          fi
-          if [ -n "${{ secrets.CONFLUENCE_SPACE_KEY }}" ]; then
-            sed -i "s|\${CONFLUENCE_SPACE_KEY}|${{ secrets.CONFLUENCE_SPACE_KEY }}|g" tests/config.test.yaml
-          fi
-          if [ -n "${{ secrets.JIRA_TOKEN }}" ]; then
-            sed -i "s|\${JIRA_TOKEN}|${{ secrets.JIRA_TOKEN }}|g" tests/config.test.yaml
-          fi
-          if [ -n "${{ secrets.JIRA_EMAIL }}" ]; then
-            sed -i "s|\${JIRA_EMAIL}|${{ secrets.JIRA_EMAIL }}|g" tests/config.test.yaml
-          fi
-          if [ -n "${{ secrets.JIRA_URL }}" ]; then
-            sed -i "s|\${JIRA_URL}|${{ secrets.JIRA_URL }}|g" tests/config.test.yaml
-          fi
-          if [ -n "${{ secrets.JIRA_PROJECT_KEY }}" ]; then
-            sed -i "s|\${JIRA_PROJECT_KEY}|${{ secrets.JIRA_PROJECT_KEY }}|g" tests/config.test.yaml
-          fi
-
-          echo "Created config.test.yaml file successfully"
-          echo "YAML config structure:"
-          head -20 tests/config.test.yaml
-
-      - name: Run loader unit tests
-        run: |
-          cd packages/qdrant-loader
-          uv run python -m pytest tests/unit -n 2 --cov=src --cov-report= -v
-
-      - name: Run loader integration tests
-        if: |
-          (github.event_name == 'pull_request' &&
-            github.event.pull_request.head.repo.full_name == github.repository &&
-            github.actor != 'dependabot[bot]' &&
-          (github.event.pull_request.base.ref == 'develop' ||
-            github.event.pull_request.base.ref == 'main')) ||
-          (github.event_name == 'push' &&
-          (github.ref_name == 'develop' || github.ref_name == 'main'))
-        run: |
-          cd packages/qdrant-loader
-          uv run python -m pytest tests/integration --cov=src --cov-append --cov-report= -v
-
-      - name: Generate coverage reports
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
-          (github.event_name == 'push' && github.ref_name == 'main')
-        run: |
-          cd packages/qdrant-loader
-          uv run coverage xml -o ../../coverage-loader.xml
-          uv run coverage html -d ../../htmlcov-loader
-
-      - name: Upload loader coverage artifact
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
-          (github.event_name == 'push' && github.ref_name == 'main')
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-loader-${{ github.run_id }}
-          path: |
-            htmlcov-loader
-            coverage-loader.xml
-          retention-days: 30
-
-  test-mcp-server:
-    name: Test MCP Server
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.0.0
-        with:
-          python-version: '3.12'
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Install dependencies
-        run: uv sync --all-packages --all-extras
-
-      # Skip secret injection for fork PRs, Dependabot, and non-protected branches —
-      # secrets are only needed when integration tests run (develop/main).
-      - name: Create .env.test file for MCP server
-        if: |
-          (github.event_name == 'pull_request' &&
-            github.event.pull_request.head.repo.full_name == github.repository &&
-            github.actor != 'dependabot[bot]' &&
-            (github.event.pull_request.base.ref == 'develop' ||
-              github.event.pull_request.base.ref == 'main')) ||
-          (github.event_name == 'push' &&
-            (github.ref_name == 'develop' || github.ref_name == 'main'))
-        run: |
-          cd packages/qdrant-loader-mcp-server
-          cp tests/.env.test.template tests/.env.test
-
-          # Check if required secrets are set
-          if [ -z "${{ secrets.QDRANT_URL }}" ]; then
-            echo "Error: QDRANT_URL secret is not set"
-            exit 1
-          fi
-          if [ -z "${{ secrets.QDRANT_API_KEY }}" ]; then
-            echo "Error: QDRANT_API_KEY secret is not set"
-            exit 1
-          fi
-          if [ -z "${{ secrets.QDRANT_COLLECTION_NAME }}" ]; then
-            echo "Error: QDRANT_COLLECTION_NAME secret is not set"
-            exit 1
-          fi
-          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
-            echo "Error: OPENAI_API_KEY secret is not set"
-            exit 1
-          fi
-
-          # Replace environment variables with secrets for integration tests
-          sed -i "s|QDRANT_URL=.*|QDRANT_URL=${{ secrets.QDRANT_URL }}|g" tests/.env.test
-          sed -i "s|QDRANT_API_KEY=.*|QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }}|g" tests/.env.test
-          sed -i "s|QDRANT_COLLECTION_NAME=.*|QDRANT_COLLECTION_NAME=${{ secrets.QDRANT_COLLECTION_NAME }}|g" tests/.env.test
-          sed -i "s|OPENAI_API_KEY=.*|OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}|g" tests/.env.test
-
-          echo "Created .env.test file for MCP server successfully"
-          echo "Contents (with secrets masked):"
-          sed 's/=.*/=***/' tests/.env.test
-
-      - name: Run MCP server unit tests
-        run: |
-          cd packages/qdrant-loader-mcp-server
-          uv run python -m pytest tests/unit -n 2 --cov=src --cov-report= -v
-
-      - name: Run MCP server integration tests
-        if: |
-          (github.event_name == 'pull_request' &&
-            github.event.pull_request.head.repo.full_name == github.repository &&
-            github.actor != 'dependabot[bot]' &&
-          (github.event.pull_request.base.ref == 'develop' ||
-            github.event.pull_request.base.ref == 'main')) ||
-          (github.event_name == 'push' &&
-          (github.ref_name == 'develop' || github.ref_name == 'main'))
-        run: |
-          cd packages/qdrant-loader-mcp-server
-          uv run python -m pytest tests/integration --cov=src --cov-append --cov-report= --cov-report=term-missing -v
-
-      - name: Generate coverage reports
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
-          (github.event_name == 'push' && github.ref_name == 'main')
-        run: |
-          cd packages/qdrant-loader-mcp-server
-          uv run coverage xml -o ../../coverage-mcp.xml
-          uv run coverage html -d ../../htmlcov-mcp
-
-      - name: Upload MCP server coverage artifact
-        if: |
-          (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
-          (github.event_name == 'push' && github.ref_name == 'main')
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-mcp-${{ github.run_id }}
-          path: |
-            htmlcov-mcp
-            coverage-mcp.xml
+            htmlcov-${{ matrix.package }}
+            coverage-${{ matrix.package }}.xml
           retention-days: 30
 
   test-website:
@@ -388,18 +109,16 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [test-core, test-loader, test-mcp-server, test-website]
+    needs: [test-packages, test-website]
     if: always()
     steps:
       - name: Check test results
         run: |
           echo "=== Test Results Summary ==="
-          echo "Core Package Tests: ${{ needs.test-core.result }}"
-          echo "QDrant Loader Tests: ${{ needs.test-loader.result }}"
-          echo "MCP Server Tests: ${{ needs.test-mcp-server.result }}"
+          echo "Package Tests: ${{ needs.test-packages.result }}"
           echo "Website Build Tests: ${{ needs.test-website.result }}"
-          
-          if [ "${{ needs.test-core.result }}" != "success" ] || [ "${{ needs.test-loader.result }}" != "success" ] || [ "${{ needs.test-mcp-server.result }}" != "success" ] || [ "${{ needs.test-website.result }}" != "success" ]; then
+
+          if [ "${{ needs.test-packages.result }}" != "success" ] || [ "${{ needs.test-website.result }}" != "success" ]; then
             echo "❌ Some tests failed"
             exit 1
           else
@@ -409,15 +128,23 @@ jobs:
       - name: Create test status artifact
         run: |
           mkdir -p test-results
-          echo "{\n            \"core_status\": \"${{ needs.test-core.result }}\",\n            \"loader_status\": \"${{ needs.test-loader.result }}\",\n            \"mcp_status\": \"${{ needs.test-mcp-server.result }}\",\n            \"website_status\": \"${{ needs.test-website.result }}\",\n            \"overall_status\": \"${{ (needs.test-core.result == 'success' && needs.test-loader.result == 'success' && needs.test-mcp-server.result == 'success' && needs.test-website.result == 'success') && 'success' || 'failure' }}\",\n            \"run_id\": \"${{ github.run_id }}\",\n            \"commit_sha\": \"${{ github.sha }}\",\n            \"branch\": \"${{ github.ref_name }}\",\n            \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n          }" > test-results/status.json
-          
+          cat > test-results/status.json <<EOF
+          {
+            "packages_status": "${{ needs.test-packages.result }}",
+            "website_status": "${{ needs.test-website.result }}",
+            "overall_status": "${{ (needs.test-packages.result == 'success' && needs.test-website.result == 'success') && 'success' || 'failure' }}",
+            "run_id": "${{ github.run_id }}",
+            "commit_sha": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
           echo "Test run completed at $(date)" > test-results/summary.txt
           echo "Run ID: ${{ github.run_id }}" >> test-results/summary.txt
           echo "Commit: ${{ github.sha }}" >> test-results/summary.txt
           echo "Branch: ${{ github.ref_name }}" >> test-results/summary.txt
-          echo "Core Package Tests: ${{ needs.test-core.result }}" >> test-results/summary.txt
-          echo "Loader Tests: ${{ needs.test-loader.result }}" >> test-results/summary.txt
-          echo "MCP Server Tests: ${{ needs.test-mcp-server.result }}" >> test-results/summary.txt
+          echo "Package Tests: ${{ needs.test-packages.result }}" >> test-results/summary.txt
           echo "Website Tests: ${{ needs.test-website.result }}" >> test-results/summary.txt
 
       - name: Upload test status artifact

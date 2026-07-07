@@ -1,5 +1,5 @@
 {
-  // Markdownlint configuration for qdrant-loader project
+  // Markdownlint configuration for HarborRAG project
   "default": true,
   "MD013": false // Ignore line length rule as requested
 }

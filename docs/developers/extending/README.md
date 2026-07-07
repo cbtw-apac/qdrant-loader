@@ -1,538 +1,155 @@
-# Extension Guide
+# Extending HarborRAG
 
-This guide provides instructions for extending QDrant Loader with custom functionality. QDrant Loader is designed with a modular architecture that allows for extension through custom connectors and configuration.
+HarborRAG extends through real implementations of the base classes already defined in `harborrag-adapters`, `harborrag-engine`, and `harborrag-runtime`. Every family below follows the same shape: subclass `base.py`, keep provider SDK imports out of `harborrag-core`, and add a package-local test using a fake client or the deterministic mock — never live credentials in the default test suite. See [Architecture Overview](../architecture/README.md#the-base-mock-pattern) for why this pattern exists.
 
-## 🎯 Extension Overview
+## Connectors
 
-QDrant Loader currently supports extension through:
+Location: `packages/harborrag-adapters/src/harborrag_adapters/connectors/`
 
-- **Custom Data Source Connectors** - Add support for new data sources by implementing the BaseConnector interface
-- **Configuration Extensions** - Extend configuration options for existing connectors
-- **File Conversion Extensions** - Leverage the MarkItDown library for additional file format support
+Contract (`connectors/base.py`, `BaseConnector`):
 
-### Current Architecture
+```python
+def discover(self) -> Iterable[SourceRecord]: ...
+def load(self, record: SourceRecord) -> RawDocument: ...
+```
+
+`MockConnector` and `MockLocalTextFileConnector` in `connectors/mock.py` show the pattern: `discover()` yields lightweight `SourceRecord`s, `load()` returns the full `RawDocument`.
+
+To add a real connector (e.g. GitHub, Confluence, Jira, a local filesystem walker):
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│ QDrant Loader CLI                                           │
-├─────────────────────────────────────────────────────────────┤
-│ Project Manager                                             │
-│ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐             │
-│ │ Config      │ │ State       │ │ Monitoring  │             │
-│ │ Management  │ │ Management  │ │             │             │
-│ └─────────────┘ └─────────────┘ └─────────────┘             │
-├─────────────────────────────────────────────────────────────┤
-│ Async Ingestion Pipeline                                    │
-│ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐             │
-│ │ Connectors  │ │ Chunking    │ │ Embeddings  │             │
-│ │             │ │             │ │             │             │
-│ └─────────────┘ └─────────────┘ └─────────────┘             │
-│ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐             │
-│ │ File        │ │ QDrant      │ │ State       │             │
-│ │ Conversion  │ │ Manager     │ │ Tracking    │             │
-│ └─────────────┘ └─────────────┘ └─────────────┘             │
-└─────────────────────────────────────────────────────────────┘
+connectors/github/
+  __init__.py
+  client.py       # thin provider SDK/HTTP client wrapper
+  connector.py    # subclasses BaseConnector, returns SourceRecord/RawDocument
+  schemas.py      # provider-specific request/response shapes
+  mock.py         # or reuse connectors/mock.py's pattern for this provider
 ```
 
-## 🚀 Development Environment Setup
+Requirements: support include/exclude filtering, checksums for change detection, a binary-file policy, a symlink policy, and file-size limits; keep the provider SDK import inside this folder, never in `harborrag-core` or `harborrag-engine`.
 
-### Prerequisites
+## Parsers
+
+Location: `packages/harborrag-adapters/src/harborrag_adapters/parsers/`
+
+Contract (`parsers/base.py`, `BaseParser`):
+
+```python
+def parse(self, raw: RawDocument) -> ParsedDocument: ...
+```
+
+`MockMarkdownParser` splits on blank lines and classifies each block as a `heading` or `paragraph` `DocumentElement` — enough to exercise the ingestion pipeline without a real parsing library.
+
+To add a real parser (PDF, Office documents, HTML):
+
+```text
+parsers/pdf/docling_engine.py
+parsers/pdf/pypdf_engine.py
+parsers/office/docx_engine.py
+```
+
+Requirements: return `ParsedDocument` with `elements` populated (`heading`, `paragraph`, `table`, `image`, `code`, or `metadata`); preserve layout/table/page metadata when the engine exposes it; return warnings instead of silently dropping partial-parse issues; include a fake-engine or fixture-based test path so tests don't need the real parsing library installed.
+
+## Model adapters
+
+Location: `packages/harborrag-adapters/src/harborrag_adapters/models/{chat,embedding,reranker}/`
+
+Contracts (`base.py` in each subfolder):
+
+```python
+# models/chat/base.py      -> BaseChatModel
+def respond(self, messages: str) -> ChatResponse: ...
+
+# models/embedding/base.py -> BaseEmbeddingModel
+def embed(self, texts: Sequence[str]) -> EmbeddingResponse: ...
+
+# models/reranker/base.py  -> BaseReranker
+def rerank(self, query: str, documents: Sequence[str], top_k: int | None = None) -> list[RerankScore]: ...
+```
+
+`MockEmbeddingModel` derives a deterministic vector from a SHA-256 digest of the text; `MockReranker` scores by token overlap. A real provider adapter (OpenAI, Bedrock, a local model server) should translate Harbor's plain-text/`Sequence[str]` inputs into the provider's native request shape, redact secrets from any diagnostics (`harborrag_core.security.redaction.redact_secrets`), and never leak raw provider payloads unless diagnostic mode is explicitly enabled.
+
+## Repositories
+
+Location: `packages/harborrag-adapters/src/harborrag_adapters/repositories/{vector,graph,cache,object_store,database}/`
+
+Use `repositories/`, never `stores/` — this is enforced by review convention (see `.coderabbit.yaml`), not currently by an automated check.
+
+Contracts:
+
+```python
+# repositories/vector/base.py -> BaseVectorRepository
+def upsert(self, items: Sequence[dict[str, Any]]) -> None: ...
+def search(self, vector: Sequence[float], top_k: int = 10) -> list[RetrievalResult]: ...
+
+# repositories/graph/base.py -> BaseGraphRepository
+def upsert_graph_hints(self, hints: Sequence[GraphHint]) -> None: ...
+
+# repositories/cache/base.py -> BaseCacheRepository
+def get(self, key: str) -> Any | None: ...
+def set(self, key: str, value: Any, ttl_seconds: int | None = None) -> None: ...
+
+# repositories/object_store/base.py -> BaseObjectRepository
+def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str: ...
+def get_bytes(self, key: str) -> bytes: ...
+
+# repositories/database/base.py -> BaseDatabaseRepository
+def execute(self, statement: str, parameters: Sequence[Any] | None = None) -> list[dict[str, Any]]: ...
+```
+
+Real implementations, matching [deploy/](../deployment/README.md)'s stack:
+
+```text
+repositories/vector/qdrant.py
+repositories/graph/neo4j.py       # or falkordb.py — see deploy/falkordb/README.md
+repositories/cache/redis.py
+repositories/object_store/s3.py
+repositories/database/postgresql.py
+```
+
+Requirements: keep raw provider responses out of public results by default; expose capability metadata (`harborrag_core.contracts.capabilities.CapabilityProfile`) so callers can check what a provider supports before calling it; add mock/fake-client tests for request/response normalization rather than requiring a live database in the default suite.
+
+## Engine stages
+
+Location: `packages/harborrag-engine/src/harborrag_engine/{ingestion,retrieval,indexing,graph}/`
+
+The ingestion (`BaseDocumentNormalizer`, `BaseChunker`, `BaseIngestionPipeline`) and retrieval (`BaseRetrievalPipeline`, `BaseEvidenceBuilder`) contracts are already implemented by mocks in `ingestion/mock.py` and `retrieval/mock.py`. A real chunker (section-aware, token-budget-aware) or a real retrieval pipeline (hybrid dense+sparse, using `retrieval/fusion.py`'s `reciprocal_rank_fusion`) should call `harborrag-core` ports and `harborrag-adapters` base classes — never a concrete provider class directly.
+
+## Runtime services
+
+Location: `packages/harborrag-runtime/src/harborrag_runtime/{jobs,scheduling,supervision,services}/`
+
+`BaseJobStore`, `BaseScheduler`, `BaseSupervisor`, and `BaseRuntimeService` each have a `Mock*` counterpart today. A durable job store (SQLite/PostgreSQL/MongoDB/Redis) needs optimistic-concurrency checks so concurrent workers cannot overwrite each other's state; a real scheduler needs missed-run handling. Optional Temporal integration belongs in `runtime/temporal/`, kept behind this package's own extras so `harborrag-core`, `harborrag-adapters`, and `harborrag-engine` never depend on Temporal.
+
+## App and MCP surfaces
+
+`harborrag-app` (`cli/`, `api/`) and `harborrag-mcp` (`tools/`, `server/`) should only call `BaseAppService` / `BaseRuntimeService` — never adapters or provider clients directly. When adding a real CLI subcommand or HTTP route, wire it through `harborrag_app.services`, not around it; when adding a real MCP tool, enforce budgets (`harborrag_mcp.policy.McpToolPolicy`) and record an audit entry (`harborrag_mcp.audit.McpAuditLog`) before returning results.
+
+## TODO comment style
+
+Every stub in this repository carries a TODO that tells the next implementer exactly what to build:
+
+```python
+# TODO(connectors/github): Implement pagination and rate-limit handling for GitHub REST responses.
+# TODO(parsers/pdf): Preserve table bounding boxes when the selected engine exposes layout coordinates.
+# TODO(repositories/vector): Normalize provider-specific scores into HarborRAG retrieval scores.
+```
+
+Avoid vague placeholders such as `TODO(later)` or `TODO(next)` — they don't tell the next person what to do. `scripts/generate_provider_matrix.py` collects every `TODO(scope): ...` comment across the packages so you can see open work at a glance:
 
 ```bash
-# Clone the repository
-git clone https://github.com/martin-papy/qdrant-loader.git
-cd qdrant-loader
-
-# Install all workspace packages with development dependencies
-uv sync --all-packages --all-extras
-
-# Run tests
-uv run pytest -v
+python scripts/generate_provider_matrix.py
 ```
 
-## 📊 Custom Data Source Connectors
-
-### Creating a Custom Connector
-
-Data source connectors fetch documents from external systems. All connectors must implement the `BaseConnector` interface:
-
-```python
-from abc import ABC, abstractmethod
-from qdrant_loader.config.source_config import SourceConfig
-from qdrant_loader.core.document import Document
-
-class BaseConnector(ABC):
-    """Base class for all connectors."""
-
-    def __init__(self, config: SourceConfig):
-        self.config = config
-        self._initialized = False
-
-    async def __aenter__(self):
-        """Async context manager entry."""
-        self._initialized = True
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
-        self._initialized = False
-
-    @abstractmethod
-    async def get_documents(self) -> list[Document]:
-        """Get documents from the source."""
-        pass
-```
-
-### Example Custom Connector Implementation
-
-Here's an example of implementing a custom connector for a REST API:
-
-```python
-import httpx
-from typing import Any
-from qdrant_loader.connectors.base import BaseConnector
-from qdrant_loader.core.document import Document
-from qdrant_loader.config.source_config import SourceConfig
-from qdrant_loader.utils.logging import LoggingConfig
-
-logger = LoggingConfig.get_logger(__name__)
-
-class CustomAPIConnector(BaseConnector):
-    """Connector for custom REST API data source."""
-
-    def __init__(self, config: SourceConfig):
-        super().__init__(config)
-        # Access configuration through config.config dict
-        self.api_url = config.config["api_url"]
-        self.api_key = config.config.get("api_key")
-        self.batch_size = config.config.get("batch_size", 100)
-
-    async def get_documents(self) -> list[Document]:
-        """Fetch documents from the custom API."""
-        documents = []
-        headers = {}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    f"{self.api_url}/documents",
-                    headers=headers,
-                    params={"limit": self.batch_size}
-                )
-                response.raise_for_status()
-                data = response.json()
-
-                for item in data.get("documents", []):
-                    document = self._convert_to_document(item)
-                    if document:
-                        documents.append(document)
-
-            except httpx.RequestError as e:
-                logger.error(f"API request failed: {e}")
-                raise
-
-        return documents
-
-    def _convert_to_document(self, api_item: dict[str, Any]) -> Document:
-        """Convert API response item to Document."""
-        return Document(
-            title=api_item.get("title", "Untitled"),
-            content_type="text/plain",
-            content=api_item["content"],
-            metadata={
-                "api_id": api_item["id"],
-                "author": api_item.get("author"),
-                "created_at": api_item.get("created_at"),
-                "tags": api_item.get("tags", []),
-            },
-            source_type="custom_api",
-            source=self.config.source,
-            url=f"{self.api_url}/documents/{api_item['id']}"
-        )
-```
-
-### Integrating Custom Connectors
-
-To integrate a custom connector:
-
-1. Implement `BaseConnector`
-2. Create a `SourceConfig` subclass with validation
-3. Wire it in your own pipeline or fork with a factory (core orchestrator directly instantiates known connectors)
-
-Example factory for forks/extensions:
-
-```python
-from qdrant_loader.connectors.base import BaseConnector
-from qdrant_loader.config.source_config import SourceConfig
-
-def create_connector(source_type: str, config: SourceConfig) -> BaseConnector:
-    if source_type == "custom_api":
-        from .custom_api import CustomAPIConnector
-        return CustomAPIConnector(config)
-    raise ValueError(f"Unknown source type: {source_type}")
-```
-
-## 📝 Document Model
-
-The `Document` model is the core data structure used throughout QDrant Loader. It uses Pydantic BaseModel:
-
-```python
-from pydantic import BaseModel, Field
-from typing import Any
-from datetime import datetime, UTC
-
-class Document(BaseModel):
-    """Document model with enhanced metadata support."""
-    id: str  # Auto-generated from source_type, source, and url
-    title: str
-    content_type: str
-    content: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    content_hash: str  # Auto-generated hash of content
-    source_type: str
-    source: str
-    url: str
-    is_deleted: bool = False
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-```
-
-### Document Creation Best Practices
-
-1. **Provide meaningful titles** - Use descriptive titles that help with search
-2. **Set appropriate content_type** - Use MIME types when possible
-3. **Include rich metadata** - Add author, creation date, tags, etc.
-4. **Use consistent source_type** - Follow naming conventions
-5. **Provide URLs when available** - Enable linking back to original content
-
-### Document Creation Example
-
-```python
-# The Document constructor automatically generates id and content_hash
-document = Document(
-    title="API Documentation",
-    content_type="text/markdown",
-    content="# API Reference\n\nThis is the API documentation...",
-    metadata={
-        "author": "John Doe",
-        "version": "1.0",
-        "tags": ["api", "documentation"],
-        "last_modified": "2024-01-15T10:30:00Z"
-    },
-    source_type="custom_api",
-    source="my-api-docs",
-    url="https://api.example.com/docs/reference"
-)
-```
-
-## 🔧 Configuration Extensions
-
-### Custom Configuration Classes
-
-Create configuration classes for your custom connectors by extending `SourceConfig`:
-
-```python
-from pydantic import BaseModel, field_validator
-from typing import Optional, List
-from qdrant_loader.config.source_config import SourceConfig
-
-class CustomAPIConfig(SourceConfig):
-    """Configuration for custom API connector."""
-    api_key: Optional[str] = None
-    batch_size: int = 100
-    timeout: int = 30
-    max_retries: int = 3
-    include_tags: List[str] = []
-    exclude_tags: List[str] = []
-
-    @field_validator('batch_size')
-    @classmethod
-    def validate_batch_size(cls, v):
-        if v < 1 or v > 1000:
-            raise ValueError('Batch size must be between 1 and 1000')
-        return v
-```
-
-### Configuration Usage
-
-```yaml
-# config.yaml
-global:
-  qdrant:
-    url: "${QDRANT_URL}"
-    api_key: "${QDRANT_API_KEY}"
-    collection_name: "my-collection"
-
-projects:
-  my-project:
-    display_name: "My Custom API Project"
-    description: "Project using custom API connector"
-    sources:
-      custom_api:
-        my-api-source:
-          base_url: "https://api.example.com"
-          api_key: "${API_KEY}"
-          batch_size: 50
-          timeout: 60
-          include_tags: ["published", "public"]
-          exclude_tags: ["draft", "private"]
-```
-
-## 🔄 File Conversion Extensions
-
-QDrant Loader uses the MarkItDown library for file conversion. You can extend file conversion capabilities by:
-
-### 1. Leveraging MarkItDown Features
-
-```python
-from qdrant_loader.core.file_conversion import FileConverter, FileConversionConfig
-
-# Configure file conversion
-config = FileConversionConfig(
-    enable_llm_descriptions=True,
-    llm_model="gpt-4o-mini",
-    max_file_size=50 * 1024 * 1024,  # 50MB
-    conversion_timeout=300  # 5 minutes
-)
-
-converter = FileConverter(config)
-```
-
-### 2. Custom File Processing
-
-```python
-class CustomFileProcessor:
-    """Custom file processor for specific formats."""
-
-    def __init__(self, converter: FileConverter):
-        self.converter = converter
-
-    async def process_custom_format(self, file_path: str) -> str:
-        """Process custom file format."""
-        if file_path.endswith('.custom'):
-            # Custom processing logic
-            with open(file_path, 'rb') as f:
-                content = f.read()
-            return self._parse_custom_format(content)
-        else:
-            # Fall back to MarkItDown
-            return await self.converter.convert_file(file_path)
-
-    def _parse_custom_format(self, content: bytes) -> str:
-        """Parse custom file format."""
-        # Your custom parsing logic here
-        return content.decode('utf-8')
-```
-
-## 🧪 Testing Custom Extensions
-
-### Unit Testing
-
-```python
-import pytest
-from unittest.mock import AsyncMock, patch
-from your_extension.custom_api import CustomAPIConnector
-from qdrant_loader.config.source_config import SourceConfig
-
-@pytest.mark.asyncio
-async def test_custom_connector_fetch_documents():
-    """Test document fetching."""
-    config = SourceConfig(
-        source_type="custom_api",
-        source="test-source",
-        base_url="https://api.example.com",
-        config={
-            "api_url": "https://api.example.com",
-            "api_key": "test_key"
-        }
-    )
-
-    connector = CustomAPIConnector(config)
-
-    # Mock the API response
-    with patch('httpx.AsyncClient.get') as mock_get:
-        mock_response = AsyncMock()
-        mock_response.json.return_value = {
-            "documents": [
-                {"id": "1", "title": "Test", "content": "Test content"}
-            ]
-        }
-        mock_response.raise_for_status.return_value = None
-        mock_get.return_value.__aenter__.return_value = mock_response
-
-        documents = await connector.get_documents()
-
-        assert len(documents) == 1
-        assert documents[0].title == "Test"
-        assert documents[0].content == "Test content"
-```
-
-### Integration Testing
-
-```python
-@pytest.mark.asyncio
-async def test_custom_connector_integration():
-    """Test full integration with QDrant Loader."""
-    from qdrant_loader.core.async_ingestion_pipeline import AsyncIngestionPipeline
-    from qdrant_loader.config import Settings
-
-    # Load test configuration
-    settings = Settings.from_yaml("test_config.yaml")
-
-    # Create pipeline with custom connector
-    pipeline = AsyncIngestionPipeline(settings)
-    result = await pipeline.process_documents(project_id="test-project")
-
-    assert len(result) > 0
-```
-
-## 📦 Packaging Extensions
-
-### Creating a Package (entry point optional)
-
-```toml
-# pyproject.toml
-[project]
-name = "qdrant-loader-custom-extension"
-version = "1.0.0"
-dependencies = [
-    "qdrant-loader>=1.0.0",
-    "httpx>=0.24.0",
-    "pydantic>=2.0.0"
-]
-
-# Optional entry-points block only if your fork discovers plugins
-# [project.entry-points."qdrant_loader.connectors"]
-# custom_api = "my_extension.custom_api:CustomAPIConnector"
-```
-
-### Distribution
+## Before opening a PR
 
 ```bash
-# Build package
-uv build
-
-# Install locally for testing
-uv sync
-
-# Publish to PyPI
-uv run python -m twine upload dist/*
+make lint
+make typecheck
+make test
+make coverage
+make compile
+make deps-check
 ```
 
-## 🔍 Advanced Patterns
-
-### Error Handling
-
-```python
-from qdrant_loader.connectors.exceptions import ConnectorError
-
-class CustomAPIConnector(BaseConnector):
-    async def get_documents(self) -> list[Document]:
-        try:
-            # Your implementation
-            pass
-        except httpx.RequestError as e:
-            raise ConnectorError(
-                f"Failed to fetch documents from {self.api_url}: {e}"
-            ) from e
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            raise
-```
-
-### Async Best Practices
-
-```python
-import asyncio
-from typing import List
-
-class CustomAPIConnector(BaseConnector):
-    def __init__(self, config: SourceConfig):
-        super().__init__(config)
-        self.session = None
-        self.semaphore = asyncio.Semaphore(10)  # Limit concurrency
-
-    async def __aenter__(self):
-        """Initialize HTTP session."""
-        await super().__aenter__()
-        self.session = httpx.AsyncClient(
-            timeout=httpx.Timeout(self.config.config.get("timeout", 30))
-        )
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Clean up HTTP session."""
-        if self.session:
-            await self.session.aclose()
-        await super().__aexit__(exc_type, exc_val, exc_tb)
-
-    async def get_documents(self) -> list[Document]:
-        """Fetch documents with proper async handling."""
-        async with self.semaphore:
-            response = await self.session.get(f"{self.api_url}/documents")
-            response.raise_for_status()
-            data = response.json()
-            return [self._convert_to_document(item) for item in data["documents"]]
-```
-
-### Configuration Inheritance
-
-```python
-class BaseAPIConnector(BaseConnector):
-    """Base class for API-based connectors."""
-
-    def __init__(self, config: SourceConfig):
-        super().__init__(config)
-        self.base_url = str(config.base_url)
-        self.api_key = config.config.get("api_key")
-        self.session = None
-
-    async def __aenter__(self):
-        """Initialize HTTP session with common settings."""
-        await super().__aenter__()
-        headers = {}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        self.session = httpx.AsyncClient(headers=headers)
-        return self
-
-class GitHubConnector(BaseAPIConnector):
-    """GitHub-specific implementation."""
-
-    async def get_documents(self) -> list[Document]:
-        """Fetch from GitHub API."""
-        response = await self.session.get(f"{self.base_url}/repos")
-        # GitHub-specific logic
-        pass
-```
-
-## 📚 Available Connectors
-
-QDrant Loader includes several built-in connectors you can reference:
-
-- **GitConnector** - Git repository processing with branch and path filtering
-- **ConfluenceConnector** - Atlassian Confluence space integration
-- **JiraConnector** - Atlassian Jira project integration
-- **LocalFileConnector** - Local file system processing
-- **PublicDocsConnector** - Public documentation websites
-
-Each connector demonstrates different patterns and can serve as examples for your custom implementations.
-
-## 🆘 Getting Help
-
-### Development Support
-
-- **[GitHub Discussions](https://github.com/martin-papy/qdrant-loader/discussions)** - Ask development questions
-- **[GitHub Issues](https://github.com/martin-papy/qdrant-loader/issues)** - Report bugs or request features
-- **[Contributing Guide](../../../CONTRIBUTING.md)** - Contribution guidelines
-
-### Related Documentation
-
-- **[Architecture Overview](../architecture/)** - System design and components
-- **[Configuration Reference](../../users/configuration/)** - Configuration options
-
----
-
-**Ready to extend QDrant Loader?** Start by implementing a custom connector using the BaseConnector interface and follow the patterns shown in the existing connectors.
+See [Testing](../testing/README.md) for what these gates check, and the root [CONTRIBUTING.md](../../CONTRIBUTING.md) for commit style and the PR checklist.

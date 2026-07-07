@@ -482,9 +482,9 @@ class TestWebsiteBuilderRegression:
 
         for input_case, expected in test_cases:
             result = builder.convert_markdown_links_to_html(input_case)
-            assert (
-                result == expected
-            ), f"Expected {expected}, got {result} for input {input_case}"
+            assert result == expected, (
+                f"Expected {expected}, got {result} for input {input_case}"
+            )
 
     def test_bootstrap_class_conflicts(self):
         """Test Bootstrap class addition with existing classes."""

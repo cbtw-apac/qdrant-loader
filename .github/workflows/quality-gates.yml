@@ -32,7 +32,16 @@ jobs:
         run: uv sync --all-packages --all-extras
 
       - name: Lint
-        run: make lint
+        run: uv run make lint
 
-      - name: Quality gates (qdrant-loader)
-        run: make quality
+      - name: Type check
+        run: uv run make typecheck
+
+      - name: Dependency direction check
+        run: uv run make deps-check
+
+      - name: Compile check
+        run: uv run make compile
+
+      - name: Coverage gate
+        run: uv run make coverage

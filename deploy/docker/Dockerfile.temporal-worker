@@ -1,0 +1,29 @@
+# HarborRAG Temporal worker image.
+# Runs the optional Temporal worker boundary for durable ingestion/retrieval workflows.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HARBORRAG_TEMPORAL_TASK_QUEUE=harborrag
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md ./
+COPY packages ./packages
+
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -e packages/harborrag-core \
+    && python -m pip install -e packages/harborrag-adapters \
+    && python -m pip install -e packages/harborrag-engine \
+    && python -m pip install -e packages/harborrag-memory \
+    && python -m pip install -e 'packages/harborrag-runtime[temporal]' \
+    && python -m pip install -e packages/harborrag-app \
+    && python -m pip install -e packages/harborrag-mcp \
+    && python -m pip install -e packages/harborrag
+
+CMD ["python", "-m", "harborrag_runtime.temporal.worker"]

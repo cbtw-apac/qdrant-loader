@@ -1,0 +1,6 @@
+name: harborrag-all
+
+include:
+  - docker-compose.dev.yml
+  - docker-compose.monitoring.yml
+  - docker-compose.temporal.yml

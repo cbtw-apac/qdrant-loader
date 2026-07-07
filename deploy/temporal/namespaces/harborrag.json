@@ -1,0 +1,5 @@
+{
+  "namespace": "harborrag",
+  "description": "HarborRAG workflow namespace",
+  "retention_days": 7
+}

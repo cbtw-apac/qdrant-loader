@@ -1,0 +1,33 @@
+name: harborrag-temporal
+
+services:
+  temporal:
+    image: temporalio/auto-setup:latest
+    ports:
+      - "7233:7233"
+    environment:
+      DB: sqlite
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    volumes:
+      - ../temporal/dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    ports:
+      - "8080:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      - temporal
+
+  temporal-worker:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.temporal-worker
+    env_file:
+      - ../../.env
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      HARBORRAG_TEMPORAL_TASK_QUEUE: harborrag
+    depends_on:
+      - temporal

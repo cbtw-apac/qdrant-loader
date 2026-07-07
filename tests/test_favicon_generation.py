@@ -58,12 +58,12 @@ class TestFaviconGenerationScript:
 
         # Check for essential imports
         assert "from pathlib import Path" in content, "Script should import Path"
-        assert (
-            "import cairosvg" in content or "from cairosvg" in content
-        ), "Script should import cairosvg"
-        assert (
-            "from PIL import Image" in content or "import PIL" in content
-        ), "Script should import PIL"
+        assert "import cairosvg" in content or "from cairosvg" in content, (
+            "Script should import cairosvg"
+        )
+        assert "from PIL import Image" in content or "import PIL" in content, (
+            "Script should import PIL"
+        )
 
     @pytest.mark.requires_deps
     def test_favicon_script_can_run_help(self):
@@ -156,9 +156,9 @@ class TestFaviconGenerationScript:
                         for filename in expected_files:
                             favicon_file = favicons_dir / filename
                             if favicon_file.exists():
-                                assert (
-                                    favicon_file.stat().st_size > 0
-                                ), f"{filename} should not be empty"
+                                assert favicon_file.stat().st_size > 0, (
+                                    f"{filename} should not be empty"
+                                )
 
                     else:
                         # Failure is okay if dependencies are missing
