@@ -100,18 +100,28 @@ def _dedupe_merged_cells(document: DoclingDocument) -> None:
 def _surface_sheet_headings(document: DoclingDocument) -> None:
     """Insert a SECTION_HEADER as the first child of each sheet group.
 
-    The docling Excel backend names each body group ``"sheet: <name>"``; we lift
-    that name into a heading so it shows up in the markdown export and in each
-    chunk's heading path. Inserting before the group's current first child (with
-    ``after=False``) parents the header on the group and makes it lead the sheet.
+    docling naming changed across versions: older builds use
+    ``"sheet: <name>"``, newer builds use the plain sheet name. We support both.
+
+    Inserting before the group's current first child (with ``after=False``)
+    parents the header on the group and makes it lead the sheet.
     """
     from docling_core.types.doc import DocItemLabel
 
     for group in document.groups:
         name = group.name or ""
-        if not name.lower().startswith(_SHEET_PREFIX) or not group.children:
+        if not name.strip() or not group.children:
             continue
-        sheet_name = name.split(":", 1)[1].strip()
+
+        lowered = name.lower()
+        sheet_name = (
+            name.split(":", 1)[1].strip()
+            if lowered.startswith(_SHEET_PREFIX)
+            else name.strip()
+        )
+        if not sheet_name:
+            continue
+
         first_child = group.children[0].resolve(document)
         document.insert_text(
             sibling=first_child,

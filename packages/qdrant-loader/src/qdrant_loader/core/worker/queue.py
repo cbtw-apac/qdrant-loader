@@ -136,29 +136,25 @@ class SQLiteJobQueue:
             (Job.status == self.RUNNING) & (Job.visibility_deadline <= now),
         )
 
+        type_filter = Job.type.in_(job_types) if job_types else None
+        candidate_query = select(Job.id).where(claimable_filter)
+        if type_filter is not None:
+            candidate_query = candidate_query.where(type_filter)
+
         candidate_job_id_subquery = (
-            select(Job.id)
-            .where(claimable_filter)
-            .order_by(Job.enqueued_at.asc(), Job.id.asc())
+            candidate_query.order_by(Job.enqueued_at.asc(), Job.id.asc())
             .limit(1)
             .scalar_subquery()
         )
 
         async with self._session_factory() as session:
-            select_stmt = select(Job.id).where(claimable_filter)
-            if job_types:
-                select_stmt = select_stmt.where(Job.type.in_(job_types))
-            candidate_job_id = await session.scalar(
-                select_stmt.order_by(Job.enqueued_at.asc(), Job.id.asc()).limit(1)
-            )
-
-            if candidate_job_id is None:
-                await session.commit()
-                return None
+            where_clauses = [Job.id == candidate_job_id_subquery, claimable_filter]
+            if type_filter is not None:
+                where_clauses.append(type_filter)
 
             result = await session.execute(
                 update(Job)
-                .where(Job.id == candidate_job_id_subquery, claimable_filter)
+                .where(*where_clauses)
                 .values(
                     status=self.RUNNING,
                     started_at=now,
