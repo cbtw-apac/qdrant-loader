@@ -36,6 +36,7 @@ classifiers = [
 dependencies = [
     "pydantic>=2.0.0",
     "structlog>=23.0.0",
+    "FalkorDB>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +52,9 @@ ollama = [
 ]
 gemini = [
     "google-genai>=0.3.0",
+]
+graph = [
+    "FalkorDB>=1.0"
 ]
 
 [project.urls]

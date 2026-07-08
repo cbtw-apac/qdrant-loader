@@ -17,8 +17,15 @@ class JobQueue(Protocol):
     async def enqueue(self, job_type: str, payload: dict[str, Any]) -> Job:
         """Create and persist a new pending job."""
 
-    async def claim_next(self, lease_seconds: int = 60) -> Job | None:
-        """Atomically claim the next visible pending job."""
+    async def claim_next(
+        self, lease_seconds: int = 60, job_types: list[str] | None = None
+    ) -> Job | None:
+        """Atomically claim the next visible pending job.
+
+        Args:
+            lease_seconds: Visibility lease duration.
+            job_types: If provided, only claim jobs whose type is in this list.
+        """
 
     def notify(self) -> asyncio.Event:
         """Return an event that fires when a job becomes available for claiming.
@@ -116,7 +123,9 @@ class SQLiteJobQueue:
             self._pending_event.set()
             return job
 
-    async def claim_next(self, lease_seconds: int = 60) -> Job | None:
+    async def claim_next(
+        self, lease_seconds: int = 60, job_types: list[str] | None = None
+    ) -> Job | None:
         if lease_seconds < 0:
             raise ValueError("lease_seconds must be non-negative")
         now = datetime.now(UTC)
@@ -127,18 +136,25 @@ class SQLiteJobQueue:
             (Job.status == self.RUNNING) & (Job.visibility_deadline <= now),
         )
 
+        type_filter = Job.type.in_(job_types) if job_types else None
+        candidate_query = select(Job.id).where(claimable_filter)
+        if type_filter is not None:
+            candidate_query = candidate_query.where(type_filter)
+
         candidate_job_id_subquery = (
-            select(Job.id)
-            .where(claimable_filter)
-            .order_by(Job.enqueued_at.asc(), Job.id.asc())
+            candidate_query.order_by(Job.enqueued_at.asc(), Job.id.asc())
             .limit(1)
             .scalar_subquery()
         )
 
         async with self._session_factory() as session:
+            where_clauses = [Job.id == candidate_job_id_subquery, claimable_filter]
+            if type_filter is not None:
+                where_clauses.append(type_filter)
+
             result = await session.execute(
                 update(Job)
-                .where(Job.id == candidate_job_id_subquery, claimable_filter)
+                .where(*where_clauses)
                 .values(
                     status=self.RUNNING,
                     started_at=now,

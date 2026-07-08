@@ -10,6 +10,7 @@ import spacy
 from gensim import corpora
 from gensim.models import LdaModel
 from gensim.parsing.preprocessing import preprocess_string
+from qdrant_loader.core.text_processing import spacy_model_cache
 from spacy.cli.download import download as spacy_download
 from spacy.tokens import Doc
 
@@ -61,13 +62,22 @@ class SemanticAnalyzer:
         """
         self.logger = logging.getLogger(__name__)
 
-        # Initialize spaCy
-        try:
-            self.nlp = spacy.load(spacy_model)
-        except OSError:
-            self.logger.info(f"Downloading spaCy model {spacy_model}...")
-            spacy_download(spacy_model)
-            self.nlp = spacy.load(spacy_model)
+        # Initialize spaCy. Cached and shared across instances -- a
+        # SemanticAnalyzer is constructed fresh per document (via
+        # ChunkProcessor), and spacy.load() is too expensive to repeat for
+        # every one of them.
+        def _load_nlp():
+            try:
+                nlp = spacy.load(spacy_model)
+            except OSError:
+                self.logger.info(f"Downloading spaCy model {spacy_model}...")
+                spacy_download(spacy_model)
+                nlp = spacy.load(spacy_model)
+            return nlp
+
+        self.nlp = spacy_model_cache.get_or_load(
+            ("semantic_analyzer", spacy_model), _load_nlp
+        )
 
         # Initialize LDA parameters
         self.num_topics = num_topics

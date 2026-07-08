@@ -2,8 +2,6 @@
 Tests for state management extensions - file conversion and attachment metadata tracking.
 """
 
-from unittest.mock import MagicMock
-
 import pytest
 import pytest_asyncio
 from qdrant_loader.config.state import StateManagementConfig
@@ -11,13 +9,17 @@ from qdrant_loader.core.document import Document
 from qdrant_loader.core.state.state_manager import StateManager
 
 
-@pytest.fixture
-def mock_config():
-    """Create mock state management configuration."""
-    config = MagicMock(spec=StateManagementConfig)
-    config.database_path = "sqlite:///:memory:"
-    config.connection_pool = {"size": 5, "timeout": 30}
-    return config
+@pytest.fixture(params=["sqlite", "postgres"])
+def mock_config(request):
+    """State config parametrized over both backends.
+
+    postgres_url is resolved lazily so its skip-when-unavailable only affects the
+    'postgres' param — the 'sqlite' param always runs.
+    """
+    if request.param == "sqlite":
+        return StateManagementConfig(database_url="sqlite+aiosqlite:///:memory:")
+    postgres_url = request.getfixturevalue("postgres_url")
+    return StateManagementConfig(database_url=postgres_url)
 
 
 @pytest_asyncio.fixture
@@ -80,7 +82,7 @@ class TestFileConversionStateTracking:
             content="# Failed Conversion\n\nFallback content.",
             content_type="md",
             source_type="localfile",
-            source="test_files",
+            source="test_files_conversion_failure",
             url="/path/to/corrupted.docx",
             metadata={
                 "conversion_method": "markitdown_fallback",
@@ -316,7 +318,7 @@ class TestConversionMetricsTracking:
     async def test_get_converted_documents(self, state_manager):
         """Test querying converted documents by source and method."""
         source_type = "localfile"
-        source = "test_files"
+        source = "test_files_get_converted_documents"
 
         # Create documents with different conversion methods
         documents_data = [
