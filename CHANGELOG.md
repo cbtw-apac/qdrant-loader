@@ -5,25 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.4] - 2026-07-08
 
 ### Added
 
 #### Qdrant-loader
 
-- Optional **PostgreSQL** backend for the state database, alongside the default SQLite. Set `STATE_DB_URL` (or `state_management.database_url`) to a full SQLAlchemy URL — e.g. `postgresql+asyncpg://user:pass@host:5432/db` — to switch backends; SQLite remains the default when `STATE_DB_URL` is unset. A bare `postgresql://` is auto-normalized to the async `asyncpg` driver. Postgres uses a real connection pool (sized from `state_management.connection_pool`) with `pool_pre_ping` + `pool_recycle` for AWS RDS resilience. The `asyncpg` driver is an optional extra — install with `pip install qdrant-loader[postgres]`; SQLite-only installs don't pull it [#349]
-- `docker/docker-compose.yaml` now bundles a `postgres:16` service and defaults the Docker deployment's state DB to Postgres (override `STATE_DB_URL` to point at AWS RDS later with no code change); local/CLI usage without Docker stays SQLite [#349]
-- Alembic migrations are now Postgres-capable (async `env.py`, reusing `asyncpg`) [#349]
-- Ingestion checkpoint and resume: pipeline runs persist progress to the state DB and can resume from the last checkpoint instead of restarting from scratch after an interruption [#298]
-- Checkpoint/resume support wired into the `serve` endpoint, webhook, and worker queue flows [#338]
-- Worker activity tracking and enhanced initialization logs for the queue worker pool [#342]
-- Dockerfile and Docker Compose files for the Qdrant loader and MCP server, reorganized under `docker/` [#346]
+- PostgreSQL state DB backend via `STATE_DB_URL`/`state_management.database_url` with asyncpg pooling; SQLite remains the default [#349]
+- Docker deployment now includes `postgres:16` and defaults state DB to Postgres [#349]
+- Alembic migrations now support PostgreSQL [#349]
+- Ingestion checkpoints persisted to state DB for resume after interruptions [#298]
+- Checkpoint/resume support in `serve`, webhook, and worker queue flows [#338]
+- Worker activity tracking and startup logging for queue worker pool [#342]
+- Qdrant loader and MCP server Docker assets reorganized under `docker/` [#346]
+- Concurrency settings for document ingestion pipeline and `serve` execution [#356]
 
 #### Qdrant-loader-core
 
-- Docling document-conversion engine and a Docling-based chunking strategy for end-to-end document conversion and chunking [#337]
-- Graph store abstraction and entity extractor for cross-document relationship tracking [#302]
-- Graph write hook in `DocumentPipeline.process_batch()` to upsert ingested nodes/edges into the graph store [#313]
+- Docling conversion engine and Docling-based chunking strategy [#337]
+- Graph store abstraction and entity extractor for cross-document relationships [#302]
+- Graph write hook in `DocumentPipeline.process_batch()` for node/edge upserts [#313]
 
 #### Qdrant-loader-mcp-server
 
@@ -33,28 +34,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Qdrant-loader
 
-- `qdrant_manager.create_collection` now honors `global.llm.embeddings.vector_size` on collection creation instead of silently falling back to the legacy `global.embedding.vector_size` (default 1024) [#340]
-- Completed the connector streaming refactor: native `stream_documents()` implementations for Confluence, Git, PublicDocs, and LocalFile connectors, removing the fake streaming fallback [#324]
-- Numbered list styling and client-side syntax highlighting on the website build [#335]
+- `qdrant_manager.create_collection` now uses `global.llm.embeddings.vector_size` instead of the legacy fallback [#340]
+- Native `stream_documents()` for Confluence, Git, PublicDocs, and LocalFile connectors (fake streaming fallback removed) [#324]
+- Numbered-list styling and client-side syntax highlighting on the website build [#335]
+- Queue claiming supports `job_types` filtering without race-related under-processing [#355]
+- XLSX post-processing surfaces sheet headings for both `sheet: <name>` and plain docling group names [#355]
 
 ### Changed
 
 #### Qdrant-loader
 
 - Website base UI feedback: padding and fixed logo sizing [#319]
+- Embedding and upsert workers now process batches in parallel for better ingestion throughput [#353]
 
 #### Qdrant-loader-mcp-server
 
-- Rebuilt the MCP server on [FastMCP](https://gofastmcp.com) v3. Tool input/output schemas are now generated from typed Python signatures instead of hand-written JSON Schema, and both stdio and streamable-HTTP transports are provided by the framework. All 11 tools are preserved with the same names (including `detect_document_conflicts`) [#341]
-- The HTTP transport runs in **stateless JSON mode**: it returns `application/json` (not SSE) and does not require an `initialize`/session handshake — each request is an independent `POST /mcp`. Clients must still send `Accept: application/json, text/event-stream`. Tool failures are reported the standard MCP way (`result.isError: true` with the message in `result.content[0].text`), not as a top-level JSON-RPC `error` object. The stdio transport is unaffected [#341]
+- MCP server migrated to [FastMCP](https://gofastmcp.com) v3 with typed-signature tool schemas and framework-managed stdio/streamable-HTTP transports; all 11 tools retained [#341]
+- HTTP transport now uses stateless JSON responses at `POST /mcp` (no initialize/session handshake); stdio transport unchanged [#341]
 
 ### Removed
 
 #### Qdrant-loader-mcp-server
 
-- Removed the hand-rolled JSON-RPC layer: the `MCPHandler` dispatcher, the `mcp/schemas/` tool-schema definitions, the `mcp/models.py` request/response models, the legacy `server.py` + `transport/` HTTP stack, and the hand-written stdio loop in `cli.py` [#341]
-- Removed the non-standard `listOfferings` method and the ability to invoke tools as top-level JSON-RPC methods (e.g. `{"method": "search"}`). Use the standard MCP `tools/list` and `tools/call` instead [#341]
-- Dropped the now-unused `fastapi`, `jsonrpcclient`, and `jsonrpcserver` dependencies [#341]
+- Hand-rolled JSON-RPC layer (`MCPHandler`, `mcp/schemas/`, `mcp/models.py`, legacy `server.py` + `transport/`, and custom stdio loop in `cli.py`) [#341]
+- Non-standard `listOfferings` and top-level tool method invocation (e.g. `{"method": "search"}`); use MCP `tools/list` and `tools/call` [#341]
+- Unused dependencies: `fastapi`, `jsonrpcclient`, `jsonrpcserver` [#341]
 
 ## [1.0.3] - 2026-06-08
 
@@ -716,6 +720,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Change detection for incremental updates [#21]
 - Signal handling for graceful shutdown [#21]
 
+[1.0.4]: https://github.com/martin-papy/qdrant-loader/compare/qdrant-loader-v1.0.3...qdrant-loader-v1.0.4
 [1.0.3]: https://github.com/martin-papy/qdrant-loader/compare/qdrant-loader-v1.0.2...qdrant-loader-v1.0.3
 [1.0.2]: https://github.com/martin-papy/qdrant-loader/compare/qdrant-loader-v1.0.1...qdrant-loader-v1.0.2
 [1.0.1]: https://github.com/martin-papy/qdrant-loader/compare/qdrant-loader-v1.0.0...qdrant-loader-v1.0.1

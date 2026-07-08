@@ -82,7 +82,7 @@ class TestFileConversionStateTracking:
             content="# Failed Conversion\n\nFallback content.",
             content_type="md",
             source_type="localfile",
-            source="test_files",
+            source="test_files_conversion_failure",
             url="/path/to/corrupted.docx",
             metadata={
                 "conversion_method": "markitdown_fallback",
@@ -318,7 +318,7 @@ class TestConversionMetricsTracking:
     async def test_get_converted_documents(self, state_manager):
         """Test querying converted documents by source and method."""
         source_type = "localfile"
-        source = "test_files"
+        source = "test_files_get_converted_documents"
 
         # Create documents with different conversion methods
         documents_data = [
