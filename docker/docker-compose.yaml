@@ -2,17 +2,23 @@
 # Docker Compose (Production Environment)
 #
 # ▶ Start local Qdrant database:
-#    docker compose -f docker/docker-compose.yaml up -d qdrant
+#    docker compose -f docker/docker-compose.yaml  --env-file .env up -d qdrant
+#
+# ▶ Start local PostgeSQL database:
+#    docker compose -f docker/docker-compose.yaml --env-file .env up -d postgres
+#
+# ▶ Start local Falkor database:
+#    docker compose -f docker/docker-compose.yaml --env-file .env up -d falkordb
 #
 # ▶ Run data ingestion (full mode):
 #    docker compose -f docker/docker-compose.yaml up -d qdrant-loader
 #
 # ▶ Run data ingestion (pilot mode) (EXPERIMENT with Jira DC / Jira Cloud):
 #    ⚠ Make sure to set the number of issues to ingest in the env file (MAX_ISSUES)
-#    docker compose -f docker/docker-compose.yaml --profile pilot up -d qdrant-loader-pilot
+#    docker compose -f docker/docker-compose.yaml --profile pilot --env-file .env up -d qdrant-loader-pilot
 #
 # ▶ Start MCP server:
-#    docker compose -f docker/docker-compose.yaml up -d qdrant-loader-mcp-server
+#    docker compose -f docker/docker-compose.yaml --env-file .env up -d qdrant-loader-mcp-server
 # ============================================================================
 
 services:
@@ -38,7 +44,7 @@ services:
       start_period: 20s
     networks:
       - qdrant-net
-  
+
   postgres:
     container_name: qdrant-loader-postgres
     image: postgres:16-alpine
@@ -54,7 +60,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qdrant_loader} -d ${POSTGRES_DB:-qdrant_loader}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-qdrant_loader} -d ${POSTGRES_DB:-qdrant_loader}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -73,7 +83,7 @@ services:
       - "8081:8081"
     environment:
       - STATE_DB_URL=${STATE_DB_URL:-postgresql+asyncpg://${POSTGRES_USER:-qdrant_loader}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qdrant_loader}}
-    depends_on: 
+    depends_on:
       qdrant:
         condition: service_healthy
       postgres:
@@ -87,12 +97,12 @@ services:
           "CMD",
           "python",
           "-c",
-          "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8081/healthz').getcode() == 200 else 1)"
+          "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8081/healthz').getcode() == 200 else 1)",
         ]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s   
+      start_period: 10s
     networks:
       - qdrant-net
 
@@ -109,7 +119,7 @@ services:
       - "8082:8081"
     environment:
       - STATE_DB_URL=${STATE_DB_URL:-postgresql+asyncpg://${POSTGRES_USER:-qdrant_loader}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qdrant_loader}}
-    depends_on: 
+    depends_on:
       qdrant:
         condition: service_healthy
       postgres:
@@ -117,15 +127,20 @@ services:
     volumes:
       - ../.env:/qdrant-loader/.env
       - ../config.yaml:/qdrant-loader/config.yaml
-      - ../docker/pilot_ingest.py:/qdrant-loader/pilot_ingest.py      
-    command: ["sh", "-c", "qdrant-loader init --config config.yaml --env .env && python /qdrant-loader/pilot_ingest.py"]
+      - ../docker/pilot_ingest.py:/qdrant-loader/pilot_ingest.py
+    command:
+      [
+        "sh",
+        "-c",
+        "qdrant-loader init --config config.yaml --env .env && python /qdrant-loader/pilot_ingest.py",
+      ]
     healthcheck:
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8081/healthz').getcode() == 200 else 1)"
+          "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8081/healthz').getcode() == 200 else 1)",
         ]
       interval: 30s
       timeout: 5s
@@ -153,7 +168,7 @@ services:
       - "8080:8080"
     env_file:
       - ../.env
-    depends_on: 
+    depends_on:
       qdrant:
         condition: service_healthy
     healthcheck:
@@ -162,12 +177,24 @@ services:
           "CMD",
           "python",
           "-c",
-          "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').getcode() == 200 else 1)"
+          "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').getcode() == 200 else 1)",
         ]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+    networks:
+      - qdrant-net
+
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: falkordb
+    ports:
+      - "6379:6379"
+      - "3000:3000"
+    volumes:
+      - falkordb_data:/var/lib/falkordb
+    restart: unless-stopped
     networks:
       - qdrant-net
 
@@ -214,10 +241,11 @@ volumes:
     driver: local
   postgres_data:
     driver: local
+  falkordb_data:
+    driver: local
   # ollama:
   #   driver: local
 
 networks:
   qdrant-net:
     driver: bridge
-
