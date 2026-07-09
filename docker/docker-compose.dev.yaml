@@ -54,8 +54,6 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
       - POSTGRES_DB=${POSTGRES_DB:-qdrant_loader}
     ports:
-      # Bind to loopback only: internal services reach Postgres over qdrant-net;
-      # this avoids exposing the DB to the host's network.
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
