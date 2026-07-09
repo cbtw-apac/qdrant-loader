@@ -10,7 +10,7 @@ COPY uv.lock pyproject.toml README.md* LICENSE* ./
 COPY packages/qdrant-loader-core /qdrant-loader-mcp-server/packages/qdrant-loader-core
 COPY packages/qdrant-loader-mcp-server /qdrant-loader-mcp-server/packages/qdrant-loader-mcp-server
 
-RUN uv sync  --frozen --package qdrant-loader-mcp-server --package qdrant-loader-core --all-extras --no-dev --no-cache --no-install-project \
+RUN uv sync  --frozen --package qdrant-loader-mcp-server --package qdrant-loader-core --all-extras --no-dev --no-install-project \
     && .venv/bin/python -m spacy download en_core_web_md
 
 RUN find /qdrant-loader-mcp-server/.venv -name "*.a" -delete && \
