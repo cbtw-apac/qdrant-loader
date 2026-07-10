@@ -21,12 +21,22 @@ def initialize_engine_and_session(
     database_url = generate_database_url(config)
 
     if database_url.startswith("sqlite"):
-        engine = create_async_engine(
-            database_url,
-            poolclass=StaticPool,
-            connect_args={"check_same_thread": False},
-            echo=False,
-        )
+        is_in_memory = ":memory:" in database_url or "mode=memory" in database_url
+        connect_args = {"check_same_thread": False, "timeout": 30}
+
+        if is_in_memory:
+            engine = create_async_engine(
+                database_url,
+                poolclass=StaticPool,
+                connect_args=connect_args,
+                echo=False,
+            )
+        else:
+            engine = create_async_engine(
+                database_url,
+                connect_args=connect_args,
+                echo=False,
+            )
     else:
         # asyncpg is an optional dependency (the `postgres` extra), imported
         # lazily only on the Postgres path so SQLite installs don't need it.

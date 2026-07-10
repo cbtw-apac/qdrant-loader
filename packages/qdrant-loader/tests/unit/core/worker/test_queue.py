@@ -475,3 +475,68 @@ async def test_list_default_offset_is_zero(sqlite_job_queue: SQLiteJobQueue):
     # Call without offset parameter (should default to 0, return first 5)
     jobs = await sqlite_job_queue.list(limit=10)
     assert len(jobs) == 5
+
+
+@pytest.mark.asyncio
+async def test_mixed_enqueue_and_claim_does_not_raise_sqlite_commit_conflict(
+    sqlite_job_queue: SQLiteJobQueue,
+):
+    """Concurrent enqueue + claim/mark should remain stable on SQLite."""
+    total_jobs = 120
+    producer_done = asyncio.Event()
+    errors: list[Exception] = []
+
+    async def producer() -> None:
+        try:
+            for i in range(total_jobs):
+                await sqlite_job_queue.enqueue("INCREMENTAL_PULL", {"index": i})
+                if i % 10 == 0:
+                    await asyncio.sleep(0)
+        except Exception as exc:  # pragma: no cover - defensive capture
+            errors.append(exc)
+        finally:
+            producer_done.set()
+
+    async def consumer() -> None:
+        while True:
+            try:
+                job = await sqlite_job_queue.claim_next(lease_seconds=30)
+            except Exception as exc:  # pragma: no cover - defensive capture
+                errors.append(exc)
+                return
+
+            if job is None:
+                if producer_done.is_set():
+                    pending = await sqlite_job_queue.list(
+                        status=SQLiteJobQueue.PENDING, limit=1
+                    )
+                    running = await sqlite_job_queue.list(
+                        status=SQLiteJobQueue.RUNNING, limit=1
+                    )
+                    if not pending and not running:
+                        return
+                await asyncio.sleep(0)
+                continue
+
+            try:
+                await sqlite_job_queue.mark_done(job.id, claim_attempt=job.attempts)
+            except Exception as exc:  # pragma: no cover - defensive capture
+                errors.append(exc)
+                return
+
+    await asyncio.wait_for(
+        asyncio.gather(producer(), *(consumer() for _ in range(4))),
+        timeout=20,
+    )
+
+    assert errors == []
+
+    done_jobs = await sqlite_job_queue.list(status=SQLiteJobQueue.DONE, limit=1000)
+    pending_jobs = await sqlite_job_queue.list(status=SQLiteJobQueue.PENDING, limit=1)
+    running_jobs = await sqlite_job_queue.list(status=SQLiteJobQueue.RUNNING, limit=1)
+    failed_jobs = await sqlite_job_queue.list(status=SQLiteJobQueue.FAILED, limit=1)
+
+    assert len(done_jobs) == total_jobs
+    assert pending_jobs == []
+    assert running_jobs == []
+    assert failed_jobs == []
