@@ -16,7 +16,9 @@ from .models import (
     GraphNode,
     SubGraph,
 )
-from .store import GraphStore
+from .base import GraphStore
+
+MAX_ROWS = 5000
 
 
 class FalkorGraphStore(GraphStore):
@@ -43,33 +45,31 @@ class FalkorGraphStore(GraphStore):
         if edge.edge_type not in {e.value for e in CoreEdgeType}:
             raise ValueError(f"Invalid edge type: {edge.edge_type}")
 
+    def _node_payload(self, node: GraphNode) -> dict[str, Any]:
+        props = self._clean_props(node.properties or {})
+        return {
+            "id": node.id,
+            "project": node.project or props.get("project"),
+            "props": props,
+        }
+
     async def upsert_node(self, node: GraphNode) -> None:
         self._validate_node(node)
 
-        props = self._clean_props(node.properties or {})
-        project = node.project or props.get("project")
+        payload = self._node_payload(node)
 
-        if project is not None:
+        if payload["project"] is not None:
             query = f"""
             MERGE (n:{node.label} {{id: $id, project: $project}})
             SET n += $props
             """
-            params = {
-                "id": node.id,
-                "project": project,
-                "props": props,
-            }
         else:
             query = f"""
             MERGE (n:{node.label} {{id: $id}})
             SET n += $props
             """
-            params = {
-                "id": node.id,
-                "props": props,
-            }
 
-        await self._run_query(query, params)
+        await self._run_query(query, payload)
 
     async def upsert_nodes_batch(self, nodes: list[GraphNode]) -> None:
         if not nodes:
@@ -82,14 +82,7 @@ class FalkorGraphStore(GraphStore):
 
         tasks = []
         for label, group_nodes in grouped.items():
-            payload = [
-                {
-                    "id": node.id,
-                    "project": node.project or (node.properties or {}).get("project"),
-                    "props": self._clean_props(node.properties or {}),
-                }
-                for node in group_nodes
-            ]
+            payload = [self._node_payload(node) for node in group_nodes]
             with_project = [n for n in payload if n["project"] is not None]
             without_project = [n for n in payload if n["project"] is None]
 
@@ -120,17 +113,20 @@ class FalkorGraphStore(GraphStore):
         if tasks:
             await asyncio.gather(*tasks)
 
-    async def upsert_edge(self, edge: GraphEdge) -> None:
-        self._validate_edge(edge)
+    def _edge_payload(self, edge: GraphEdge) -> dict[str, Any]:
         props = self._clean_props(edge.properties or {})
-        project = edge.project or props.get("project")
-        params = {
+        return {
             "source": edge.source,
             "target": edge.target,
+            "project": edge.project or props.get("project"),
             "props": props,
         }
-        if project is not None:
-            params["project"] = project
+
+    async def upsert_edge(self, edge: GraphEdge) -> None:
+        self._validate_edge(edge)
+        payload = self._edge_payload(edge)
+
+        if payload["project"] is not None:
             query = f"""
             MATCH (a {{id: $source, project: $project}}),
                 (b {{id: $target, project: $project}})
@@ -144,7 +140,7 @@ class FalkorGraphStore(GraphStore):
             MERGE (a)-[r:{edge.edge_type}]->(b)
             SET r += $props
             """
-        await self._run_query(query, params)
+        await self._run_query(query, payload)
 
     async def upsert_edges_batch(
         self,
@@ -160,15 +156,7 @@ class FalkorGraphStore(GraphStore):
 
         tasks = []
         for edge_type, group_edges in grouped.items():
-            payload = [
-                {
-                    "source": edge.source,
-                    "target": edge.target,
-                    "project": edge.project or (edge.properties or {}).get("project"),
-                    "props": self._clean_props(edge.properties or {}),
-                }
-                for edge in group_edges
-            ]
+            payload = [self._edge_payload(edge) for edge in group_edges]
 
             with_project = [e for e in payload if e["project"] is not None]
             without_project = [e for e in payload if e["project"] is None]
@@ -218,7 +206,6 @@ class FalkorGraphStore(GraphStore):
                 raise ValueError(f"Invalid edge types: {invalid}")
             edge_filter = ":" + "|".join(edge_types)
         params = {"id": node_id}
-        MAX_ROWS = 5000
         if project:
             params["project"] = project
             query = f"""

@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from qdrant_loader_core.graph.models import GraphEdge, GraphNode, SubGraph
-from qdrant_loader_core.graph.store import GraphStore
+from qdrant_loader_core.graph.base import GraphStore
 
 
 class DummyGraphStore(GraphStore):

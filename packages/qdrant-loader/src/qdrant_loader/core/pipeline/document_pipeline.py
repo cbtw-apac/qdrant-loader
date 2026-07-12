@@ -176,13 +176,13 @@ class DocumentPipeline:
                 len(nodes_batch),
                 len(edges_batch),
             )
-            logger.info("=== NODES ===")
+            logger.debug("=== NODES ===")
             for i, node in enumerate(nodes_batch, start=1):
-                logger.info("Node %s: %s", i, node)
+                logger.debug("Node %s: %s", i, node)
 
-            logger.info("=== EDGES ===")
+            logger.debug("=== EDGES ===")
             for i, edge in enumerate(edges_batch, start=1):
-                logger.info("Edge %s: %s", i, edge)
+                logger.debug("Edge %s: %s", i, edge)
         except Exception as e:
             logger.error(
                 "⚠️ Graph upsert failed (non-fatal): %s",
