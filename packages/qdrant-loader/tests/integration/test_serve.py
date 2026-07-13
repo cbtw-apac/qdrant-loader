@@ -37,7 +37,7 @@ async def _make_queue() -> tuple[SQLiteJobQueue, async_sessionmaker, any]:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    return SQLiteJobQueue(factory), factory, engine
+    return SQLiteJobQueue(factory, db_op_lock=asyncio.Lock()), factory, engine
 
 
 # ── No-op job handler ────────────────────────────────────────────────────────

@@ -64,7 +64,10 @@ async def _run_with_queue(workspace, config, env, coro_factory):
     try:
         from qdrant_loader.core.worker.queue import SQLiteJobQueue
 
-        queue_instance = SQLiteJobQueue(state_manager.session_factory)
+        queue_instance = SQLiteJobQueue(
+            state_manager.session_factory,
+            db_op_lock=state_manager.queue_db_op_lock,
+        )
         return await coro_factory(queue_instance)
     finally:
         await state_manager.dispose()
