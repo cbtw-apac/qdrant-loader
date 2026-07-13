@@ -26,9 +26,9 @@ USER appuser
 ARG QDRANT_LOADER_VERSION=latest
 
 RUN if [ "$QDRANT_LOADER_VERSION" = "latest" ]; then \
-       pip install --no-cache-dir qdrant-loader; \
+       pip install --no-cache-dir "qdrant-loader[postgres,server]"; \
      else \
-       pip install --no-cache-dir "qdrant-loader==${QDRANT_LOADER_VERSION}"; \
+       pip install --no-cache-dir "qdrant-loader[postgres,server]==${QDRANT_LOADER_VERSION}"; \
      fi && \
      python -m spacy download en_core_web_md
 
