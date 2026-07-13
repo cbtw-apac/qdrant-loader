@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from .config import JiraExtraField, JiraFieldType
-from .models import JiraAttachment, JiraComment, JiraIssue, JiraUser
+from .models import JiraAttachment, JiraComment, JiraIssue, JiraIssueLink, JiraUser
 
 
 def parse_user(
@@ -126,6 +126,55 @@ def _extract_extra_field_value(
     return None
 
 
+def _parse_linked_issues(raw_links: Any) -> list[JiraIssueLink]:
+    """Parse Jira `issuelinks` entries into JiraIssueLink, keeping direction and type.
+
+    Each entry has either an `outwardIssue` or an `inwardIssue`, and a `type` object
+    whose `outward`/`inward` string is the relationship phrase to use for that side
+    (e.g. type.outward="clones", type.inward="is cloned by").
+    """
+    if not isinstance(raw_links, list):
+        return []
+
+    links: list[JiraIssueLink] = []
+    for link in raw_links:
+        if not isinstance(link, dict):
+            continue
+
+        link_type = link.get("type")
+        type_name = link_type.get("name") if isinstance(link_type, dict) else None
+
+        outward = link.get("outwardIssue")
+        inward = link.get("inwardIssue")
+
+        if isinstance(outward, dict) and outward.get("key"):
+            links.append(
+                JiraIssueLink(
+                    key=outward["key"],
+                    link_type=type_name,
+                    direction="outward",
+                    relation=(
+                        link_type.get("outward")
+                        if isinstance(link_type, dict)
+                        else None
+                    ),
+                )
+            )
+        elif isinstance(inward, dict) and inward.get("key"):
+            links.append(
+                JiraIssueLink(
+                    key=inward["key"],
+                    link_type=type_name,
+                    direction="inward",
+                    relation=(
+                        link_type.get("inward") if isinstance(link_type, dict) else None
+                    ),
+                )
+            )
+
+    return links
+
+
 def parse_issue(
     raw_issue: dict[str, Any], extra_fields: list[JiraExtraField] | None = None
 ) -> JiraIssue:
@@ -234,15 +283,9 @@ def parse_issue(
         st.get("key") for st in raw_subtasks if isinstance(st, dict) and st.get("key")
     ]
 
-    # Safely extract linked issues (outward only as before)
+    # Safely extract linked issues, preserving direction and relationship type
     raw_links = fields.get("issuelinks", [])
-    linked_outward = [
-        link.get("outwardIssue", {}).get("key")
-        for link in raw_links
-        if isinstance(link, dict)
-        and isinstance(link.get("outwardIssue"), dict)
-        and link.get("outwardIssue", {}).get("key")
-    ]
+    linked_issues = _parse_linked_issues(raw_links)
 
     # Optional fields
     priority_name = None
@@ -289,7 +332,7 @@ def parse_issue(
         ],
         parent_key=parent_key,
         subtasks=subtasks_keys,
-        linked_issues=[key for key in linked_outward if key],
+        linked_issues=linked_issues,
     )
     if extra_fields:
         for field in extra_fields:

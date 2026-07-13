@@ -58,14 +58,20 @@ class FalkorGraphStore(GraphStore):
 
         payload = self._node_payload(node)
 
+        # Match by (id, project) only, not label: an edge upsert may have already
+        # created a stub node for this id before its real label was known. Adding
+        # the label via SET (instead of matching on it) lets this MERGE find and
+        # enrich that stub rather than creating a duplicate node.
         if payload["project"] is not None:
             query = f"""
-            MERGE (n:{node.label} {{id: $id, project: $project}})
+            MERGE (n {{id: $id, project: $project}})
+            SET n:{node.label}
             SET n += $props
             """
         else:
             query = f"""
-            MERGE (n:{node.label} {{id: $id}})
+            MERGE (n {{id: $id}})
+            SET n:{node.label}
             SET n += $props
             """
 
@@ -91,7 +97,8 @@ class FalkorGraphStore(GraphStore):
                     self._run_query(
                         f"""
                         UNWIND $nodes AS node
-                        MERGE (n:{label} {{id: node.id, project: node.project}})
+                        MERGE (n {{id: node.id, project: node.project}})
+                        SET n:{label}
                         SET n += node.props
                         """,
                         {"nodes": with_project},
@@ -103,7 +110,8 @@ class FalkorGraphStore(GraphStore):
                     self._run_query(
                         f"""
                         UNWIND $nodes AS node
-                        MERGE (n:{label} {{id: node.id}})
+                        MERGE (n {{id: node.id}})
+                        SET n:{label}
                         SET n += node.props
                         """,
                         {"nodes": without_project},
@@ -126,17 +134,21 @@ class FalkorGraphStore(GraphStore):
         self._validate_edge(edge)
         payload = self._edge_payload(edge)
 
+        # MERGE (not MATCH) the endpoints: the target of an edge (e.g. a linked
+        # Jira issue) may not have been ingested yet. MATCH would silently drop
+        # the edge with zero rows and no error; MERGE creates an unlabeled stub
+        # node instead, which upsert_node later enriches with its real label.
         if payload["project"] is not None:
             query = f"""
-            MATCH (a {{id: $source, project: $project}}),
-                (b {{id: $target, project: $project}})
+            MERGE (a {{id: $source, project: $project}})
+            MERGE (b {{id: $target, project: $project}})
             MERGE (a)-[r:{edge.edge_type}]->(b)
             SET r += $props
             """
         else:
             query = f"""
-            MATCH (a {{id: $source}}),
-                (b {{id: $target}})
+            MERGE (a {{id: $source}})
+            MERGE (b {{id: $target}})
             MERGE (a)-[r:{edge.edge_type}]->(b)
             SET r += $props
             """
@@ -166,8 +178,8 @@ class FalkorGraphStore(GraphStore):
                     self._run_query(
                         f"""
                     UNWIND $edges AS e
-                    MATCH (a {{id: e.source, project: e.project}})
-                    MATCH (b {{id: e.target, project: e.project}})
+                    MERGE (a {{id: e.source, project: e.project}})
+                    MERGE (b {{id: e.target, project: e.project}})
                     MERGE (a)-[r:{edge_type}]->(b)
                     SET r += e.props
                     """,
@@ -179,8 +191,8 @@ class FalkorGraphStore(GraphStore):
                     self._run_query(
                         f"""
                     UNWIND $edges AS e
-                    MATCH (a {{id: e.source}})
-                    MATCH (b {{id: e.target}})
+                    MERGE (a {{id: e.source}})
+                    MERGE (b {{id: e.target}})
                     MERGE (a)-[r:{edge_type}]->(b)
                     SET r += e.props
                     """,

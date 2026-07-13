@@ -35,6 +35,25 @@ class JiraAttachment(BaseModel):
     author: JiraUser = Field(..., description="User who attached the file")
 
 
+class JiraIssueLink(BaseModel):
+    """A single Jira issue link, preserving direction and relationship type."""
+
+    key: str = Field(..., description="Key of the linked issue")
+    link_type: str | None = Field(
+        None, description="Jira link type name (e.g. 'Blocks', 'Cloners')"
+    )
+    direction: str = Field(
+        ..., description="Direction of the link relative to this issue: 'inward' or 'outward'"
+    )
+    relation: str | None = Field(
+        None,
+        description=(
+            "Human-readable relationship phrase from this issue's perspective "
+            "(e.g. 'blocks', 'is cloned by')"
+        ),
+    )
+
+
 class JiraIssue(BaseModel):
     """Jira issue model."""
 
@@ -62,6 +81,6 @@ class JiraIssue(BaseModel):
     subtasks: list[str] = Field(
         default_factory=list, description="List of subtask keys"
     )
-    linked_issues: list[str] = Field(
-        default_factory=list, description="List of linked issue keys"
+    linked_issues: list[JiraIssueLink] = Field(
+        default_factory=list, description="List of linked issues with type and direction"
     )

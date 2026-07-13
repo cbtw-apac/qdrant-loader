@@ -89,7 +89,7 @@ class DocumentPipeline:
         # 2. Prepare dedup storage
         # ---------------------------
         nodes_dict: dict[str, Any] = {}
-        edges_dict: dict[tuple[str, str, str], Any] = {}
+        edges_dict: dict[tuple[str, str, str, str | None], Any] = {}
 
         # Optional: group by source_type for efficiency
         grouped_docs: dict[str, list[Document]] = defaultdict(list)
@@ -116,7 +116,13 @@ class DocumentPipeline:
 
                         if getattr(subgraph, "edges", None):
                             for edge in subgraph.edges:
-                                edge_key = (edge.source, edge.target, edge.edge_type)
+                                kind = (edge.properties or {}).get("kind")
+                                edge_key = (
+                                    edge.source,
+                                    edge.target,
+                                    edge.edge_type,
+                                    kind,
+                                )
                                 edges_dict[edge_key] = edge
 
                     except Exception as e:
