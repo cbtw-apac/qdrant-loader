@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
+from typing import Literal
 
 class JiraUser(BaseModel):
     """Jira user model."""
@@ -42,7 +43,7 @@ class JiraIssueLink(BaseModel):
     link_type: str | None = Field(
         None, description="Jira link type name (e.g. 'Blocks', 'Cloners')"
     )
-    direction: str = Field(
+    direction: Literal["inward", "outward"] = Field(
         ..., description="Direction of the link relative to this issue: 'inward' or 'outward'"
     )
     relation: str | None = Field(

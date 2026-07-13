@@ -142,7 +142,7 @@ class FalkorGraphStore(GraphStore):
             query = f"""
             MERGE (a {{id: $source, project: $project}})
             MERGE (b {{id: $target, project: $project}})
-            MERGE (a)-[r:{edge.edge_type}]->(b)
+            MERGE (a)-[r:{edge.edge_type} {{kind: $props.kind}}]->(b)
             SET r += $props
             """
         else:
