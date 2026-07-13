@@ -53,8 +53,8 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-qdrant_loader}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
       - POSTGRES_DB=${POSTGRES_DB:-qdrant_loader}
-    ports:
-      - "5432:5432"
+    expose:
+      - "5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
