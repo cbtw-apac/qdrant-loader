@@ -57,7 +57,10 @@ async def test_jira_linked_issues_preserve_relation_and_direction():
         "status": "Open",
         "priority": "High",
         "issue_type": "Bug",
-        "linked_issues": [
+        # linked_issue_details is the structured field the connector now emits
+        # alongside the legacy plain-key linked_issues list.
+        "linked_issues": ["ABC-2", "ABC-3"],
+        "linked_issue_details": [
             {
                 "key": "ABC-2",
                 "link_type": "Cloners",
@@ -70,8 +73,6 @@ async def test_jira_linked_issues_preserve_relation_and_direction():
                 "direction": "inward",
                 "relation": "is cloned by",
             },
-            # Backward-compat: plain string key, no type/direction metadata.
-            "ABC-4",
         ],
     }
 
@@ -93,6 +94,34 @@ async def test_jira_linked_issues_preserve_relation_and_direction():
 
     assert link_edges["ABC-3"].properties["kind"] == "is cloned by"
     assert link_edges["ABC-3"].properties["direction"] == "inward"
+
+
+@pytest.mark.asyncio
+async def test_jira_linked_issues_falls_back_to_legacy_plain_keys():
+    """Documents indexed before linked_issue_details existed only have linked_issues."""
+    extractor = JiraEntityExtractor()
+
+    metadata = {
+        "key": "ABC-1",
+        "project_key": "ABC",
+        "status": "Open",
+        "priority": "High",
+        "issue_type": "Bug",
+        "linked_issues": ["ABC-4"],
+    }
+
+    doc = Document(
+        title="Fix login bug",
+        content_type="issue",
+        content="Jira issue content",
+        source_type="jira",
+        source="ABC-1",
+        url="http://jira/ABC-1",
+        metadata=metadata,
+    )
+
+    result = await extractor.extract(doc)
+    link_edges = {e.target: e for e in result.edges if e.source == "ABC-1"}
 
     assert link_edges["ABC-4"].properties["kind"] == "related"
     assert "direction" not in link_edges["ABC-4"].properties

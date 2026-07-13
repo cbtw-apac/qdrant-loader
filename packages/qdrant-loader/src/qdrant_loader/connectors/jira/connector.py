@@ -526,14 +526,15 @@ class BaseJiraConnector(BaseConnector):
                 "updated": issue.updated.isoformat(),
                 "parent_key": issue.parent_key,
                 "subtasks": issue.subtasks,
-                "linked_issues": [
+                "linked_issues": issue.linked_issues,
+                "linked_issue_details": [
                     {
                         "key": link.key,
                         "link_type": link.link_type,
                         "direction": link.direction,
                         "relation": link.relation,
                     }
-                    for link in issue.linked_issues
+                    for link in issue.linked_issue_details
                 ],
                 "comments": [
                     {

@@ -285,7 +285,7 @@ def parse_issue(
 
     # Safely extract linked issues, preserving direction and relationship type
     raw_links = fields.get("issuelinks", [])
-    linked_issues = _parse_linked_issues(raw_links)
+    linked_issue_details = _parse_linked_issues(raw_links)
 
     # Optional fields
     priority_name = None
@@ -332,7 +332,8 @@ def parse_issue(
         ],
         parent_key=parent_key,
         subtasks=subtasks_keys,
-        linked_issues=linked_issues,
+        linked_issues=[link.key for link in linked_issue_details],
+        linked_issue_details=linked_issue_details,
     )
     if extra_fields:
         for field in extra_fields:

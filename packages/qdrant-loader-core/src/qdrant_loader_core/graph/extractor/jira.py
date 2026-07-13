@@ -253,7 +253,12 @@ class JiraEntityExtractor(BaseEntityExtractor):
         # Linked Issues
         # --------------------------------------------------------------
 
-        for link in metadata.get("linked_issues", []):
+        # linked_issue_details carries relation/direction; linked_issues is the
+        # legacy plain-key list kept for documents indexed before that field existed.
+        links = metadata.get("linked_issue_details") or metadata.get(
+            "linked_issues", []
+        )
+        for link in links:
             if isinstance(link, dict):
                 target_key = link.get("key")
                 kind = link.get("relation") or link.get("link_type") or "related"

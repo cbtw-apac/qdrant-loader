@@ -1423,8 +1423,9 @@ class TestJiraLinkedIssuesMapping:
 
         issue = parse_issue(raw_issue)
 
-        assert len(issue.linked_issues) == 1
-        link = issue.linked_issues[0]
+        assert issue.linked_issues == ["TEST-2"]
+        assert len(issue.linked_issue_details) == 1
+        link = issue.linked_issue_details[0]
         assert link.key == "TEST-2"
         assert link.link_type == "Cloners"
         assert link.direction == "outward"
@@ -1452,8 +1453,9 @@ class TestJiraLinkedIssuesMapping:
 
         issue = parse_issue(raw_issue)
 
-        assert len(issue.linked_issues) == 1
-        link = issue.linked_issues[0]
+        assert issue.linked_issues == ["TEST-3"]
+        assert len(issue.linked_issue_details) == 1
+        link = issue.linked_issue_details[0]
         assert link.key == "TEST-3"
         assert link.link_type == "Cloners"
         assert link.direction == "inward"
@@ -1488,14 +1490,16 @@ class TestJiraLinkedIssuesMapping:
 
         issue = parse_issue(raw_issue)
 
-        by_key = {link.key: link for link in issue.linked_issues}
+        assert set(issue.linked_issues) == {"TEST-2", "TEST-3"}
+
+        by_key = {link.key: link for link in issue.linked_issue_details}
         assert set(by_key) == {"TEST-2", "TEST-3"}
         assert by_key["TEST-2"].direction == "outward"
         assert by_key["TEST-2"].relation == "clones"
         assert by_key["TEST-3"].direction == "inward"
         assert by_key["TEST-3"].relation == "is cloned by"
 
-    def test_connector_serializes_linked_issues_as_dicts_in_metadata(
+    def test_connector_serializes_linked_issues_legacy_and_detailed_metadata(
         self, jira_cloud_config, mock_cloud_issue_data
     ):
         connector = JiraCloudConnector(jira_cloud_config)
@@ -1513,8 +1517,8 @@ class TestJiraLinkedIssuesMapping:
 
         asyncio.run(_collect())
 
-        linked = documents[0].metadata["linked_issues"]
-        assert linked == [
+        assert documents[0].metadata["linked_issues"] == ["TEST-3"]
+        assert documents[0].metadata["linked_issue_details"] == [
             {
                 "key": "TEST-3",
                 "link_type": None,

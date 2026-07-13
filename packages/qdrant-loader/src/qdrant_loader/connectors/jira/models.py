@@ -82,6 +82,10 @@ class JiraIssue(BaseModel):
     subtasks: list[str] = Field(
         default_factory=list, description="List of subtask keys"
     )
-    linked_issues: list[JiraIssueLink] = Field(
-        default_factory=list, description="List of linked issues with type and direction"
+    linked_issues: list[str] = Field(
+        default_factory=list, description="List of linked issue keys"
+    )
+    linked_issue_details: list[JiraIssueLink] = Field(
+        default_factory=list,
+        description="Linked issues with relationship type and direction",
     )
