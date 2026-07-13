@@ -20,8 +20,9 @@ async def sqlite_job_queue(tmp_path: Path):
     config = StateManagementConfig(database_path=str(db_path))
     engine, session_factory = initialize_engine_and_session(config)
     await create_tables(engine)
+    queue_lock = asyncio.Lock()
 
-    queue = SQLiteJobQueue(session_factory)
+    queue = SQLiteJobQueue(session_factory, db_op_lock=queue_lock)
     try:
         yield queue
     finally:
@@ -85,7 +86,11 @@ async def test_claim_next_no_duplicate_claims_across_queue_instances(
 ):
     # Simulate multiple independent workers/processes sharing the same DB.
     queues = [sqlite_job_queue] + [
-        SQLiteJobQueue(sqlite_job_queue._session_factory) for _ in range(7)
+        SQLiteJobQueue(
+            sqlite_job_queue._session_factory,
+            db_op_lock=sqlite_job_queue._db_op_lock,
+        )
+        for _ in range(7)
     ]
 
     for i in range(50):

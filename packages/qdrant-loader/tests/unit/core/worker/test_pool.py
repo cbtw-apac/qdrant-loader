@@ -25,7 +25,7 @@ async def sqlite_job_queue(tmp_path: Path):
     engine, session_factory = initialize_engine_and_session(config)
     await create_tables(engine)
 
-    queue = SQLiteJobQueue(session_factory)
+    queue = SQLiteJobQueue(session_factory, db_op_lock=asyncio.Lock())
     try:
         yield queue
     finally:

@@ -2,6 +2,8 @@
 State management service for tracking document ingestion state.
 """
 
+import asyncio
+
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -35,6 +37,7 @@ class StateManager:
         self._initialized = False
         self._engine: AsyncEngine | None = None
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
+        self._queue_db_op_lock = asyncio.Lock()
         self.logger = LoggingConfig.get_logger(__name__)
 
     @property
@@ -48,6 +51,11 @@ class StateManager:
         if self._session_factory is None:
             raise RuntimeError("State manager session factory is not initialized")
         return self._session_factory
+
+    @property
+    def queue_db_op_lock(self) -> asyncio.Lock:
+        """Shared lock for queue DB operations on this state backend."""
+        return self._queue_db_op_lock
 
     async def get_session(self) -> "AsyncSession":
         """Return an async session context manager, initializing if needed.

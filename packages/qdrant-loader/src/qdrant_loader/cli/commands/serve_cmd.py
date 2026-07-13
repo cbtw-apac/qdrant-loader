@@ -147,7 +147,10 @@ async def _serve_main(
 
     logger.info("serve.queue_init")
     session_factory = state_manager.session_factory
-    job_queue = SQLiteJobQueue(session_factory)
+    job_queue = SQLiteJobQueue(
+        session_factory,
+        db_op_lock=state_manager.queue_db_op_lock,
+    )
 
     logger.info("serve.qdrant_init")
     qdrant_manager = QdrantManager(settings)

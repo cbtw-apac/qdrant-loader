@@ -94,13 +94,18 @@ class SQLiteJobQueue:
     FAILED = "failed"
     CANCELLED = "cancelled"
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        db_op_lock: asyncio.Lock,
+    ):
         self._session_factory = session_factory
         self._pending_event = asyncio.Event()
         # Serialize queue DB operations for SQLite-backed state stores.
-        # This avoids cross-task commit/statement conflicts when multiple
-        # workers (ingestion + webhook) operate on a shared queue.
-        self._db_op_lock = asyncio.Lock()
+        # Lock is injected by the shared owner (e.g. StateManager) so
+        # multiple SQLiteJobQueue instances that share a backend also share
+        # the same DB-operation lock.
+        self._db_op_lock = db_op_lock
 
     def notify(self) -> asyncio.Event:
         """Return the event used to signal when jobs become available."""
@@ -133,26 +138,34 @@ class SQLiteJobQueue:
     ) -> Job | None:
         if lease_seconds < 0:
             raise ValueError("lease_seconds must be non-negative")
-        now = datetime.now(UTC)
-        visibility_deadline = now + timedelta(seconds=lease_seconds)
-        claimable_filter = or_(
-            (Job.status == self.PENDING)
-            & ((Job.visibility_deadline.is_(None)) | (Job.visibility_deadline <= now)),
-            (Job.status == self.RUNNING) & (Job.visibility_deadline <= now),
-        )
 
         type_filter = Job.type.in_(job_types) if job_types else None
-        candidate_query = select(Job.id).where(claimable_filter)
-        if type_filter is not None:
-            candidate_query = candidate_query.where(type_filter)
-
-        candidate_job_id_subquery = (
-            candidate_query.order_by(Job.enqueued_at.asc(), Job.id.asc())
-            .limit(1)
-            .scalar_subquery()
-        )
 
         async with self._db_op_lock:
+            # Compute timestamps inside the lock so they reflect the actual
+            # moment the claim executes, not the moment the caller enqueued
+            # the coroutine (which may have waited for the lock).
+            now = datetime.now(UTC)
+            visibility_deadline = now + timedelta(seconds=lease_seconds)
+            claimable_filter = or_(
+                (Job.status == self.PENDING)
+                & (
+                    (Job.visibility_deadline.is_(None))
+                    | (Job.visibility_deadline <= now)
+                ),
+                (Job.status == self.RUNNING) & (Job.visibility_deadline <= now),
+            )
+
+            candidate_query = select(Job.id).where(claimable_filter)
+            if type_filter is not None:
+                candidate_query = candidate_query.where(type_filter)
+
+            candidate_job_id_subquery = (
+                candidate_query.order_by(Job.enqueued_at.asc(), Job.id.asc())
+                .limit(1)
+                .scalar_subquery()
+            )
+
             async with self._session_factory() as session:
                 where_clauses = [Job.id == candidate_job_id_subquery, claimable_filter]
                 if type_filter is not None:
