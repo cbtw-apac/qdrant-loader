@@ -51,8 +51,10 @@ class GraphStore(ABC):
         self,
         cypher: str,
         params: dict[str, Any],
-    ) -> list[dict[str, Any]]:
+    ) -> list[list[Any]]:
         """
-        Execute Cypher query (for graph DBs that support it)
+        Execute Cypher query (for graph DBs that support it).
+        Returns rows as returned by the underlying driver (row-oriented,
+        one list per row in RETURN-clause order), not column-keyed dicts.
         """
         raise NotImplementedError

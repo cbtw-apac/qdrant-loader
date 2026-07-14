@@ -1063,9 +1063,7 @@ class TestFetchById:
             "_get_space_content_cloud",
             AsyncMock(side_effect=[page1, page2]),
         ) as mock_get_content:
-            entity_ids = [
-                entity_id async for entity_id in connector.list_entity_ids()
-            ]
+            entity_ids = [entity_id async for entity_id in connector.list_entity_ids()]
 
         assert entity_ids == ["1", "3"]
         for call in mock_get_content.call_args_list:
@@ -1091,9 +1089,7 @@ class TestFetchById:
             "_get_space_content_datacenter",
             AsyncMock(return_value=page),
         ) as mock_get_content:
-            entity_ids = [
-                entity_id async for entity_id in connector.list_entity_ids()
-            ]
+            entity_ids = [entity_id async for entity_id in connector.list_entity_ids()]
 
         assert entity_ids == ["10"]
         mock_get_content.assert_called_once()

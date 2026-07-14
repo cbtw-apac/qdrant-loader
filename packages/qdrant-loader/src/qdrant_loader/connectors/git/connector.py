@@ -445,9 +445,7 @@ class GitConnector(BaseConnector):
         self._ensure_initialized()
         file_path = resolve_safe_path(self.temp_dir, entity_id)
         if file_path is None:
-            self.logger.warning(
-                "Path traversal attempt blocked", entity_id=entity_id
-            )
+            self.logger.warning("Path traversal attempt blocked", entity_id=entity_id)
             return None
         if not os.path.exists(file_path) or not self.file_processor.should_process_file(  # type: ignore
             file_path

@@ -481,9 +481,7 @@ class TestFetchById:
         base_url = str(publicdocs_config.base_url)
         excluded_url = f"{base_url}blog/post1"
 
-        with patch.object(
-            connector, "_process_page", AsyncMock()
-        ) as mock_process_page:
+        with patch.object(connector, "_process_page", AsyncMock()) as mock_process_page:
             document = await connector.fetch_by_id(excluded_url)
 
         assert document is None
@@ -537,8 +535,6 @@ class TestFetchById:
             "_get_all_pages",
             AsyncMock(return_value=[included_url, excluded_url, external_url]),
         ):
-            entity_ids = [
-                entity_id async for entity_id in connector.list_entity_ids()
-            ]
+            entity_ids = [entity_id async for entity_id in connector.list_entity_ids()]
 
         assert entity_ids == [included_url]

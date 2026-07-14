@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, call
 
 import pytest
 from qdrant_loader_core.graph.models import CoreEdgeType, CoreNodeLabel
-from qdrant_loader_core.graph.schema.init_schema import (
+from qdrant_loader_core.graph.schema.utils import (
     LATEST_VERSION,
     _ensure_indexes,
     _get_current_version,

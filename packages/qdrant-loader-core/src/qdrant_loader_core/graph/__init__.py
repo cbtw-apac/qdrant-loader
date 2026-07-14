@@ -3,18 +3,16 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from .schema.init_schema import init_schema
-from .store import GraphEdge, GraphNode, GraphStore, SubGraph
+from .base import GraphEdge, GraphNode, GraphStore, SubGraph
+from .schema.utils import init_schema
 
 if TYPE_CHECKING:
     from .falkor_store import FalkorGraphStore
 
 try:
-    from .falkor_store import FalkorGraphStore as _FalkorGraphStore
+    from .falkor_store import FalkorGraphStore
 except ImportError:
-    _FalkorGraphStore = None
-
-FalkorGraphStore = _FalkorGraphStore
+    FalkorGraphStore = None
 
 try:
     from qdrant_loader.config import get_settings
@@ -43,7 +41,7 @@ async def get_graph_store(
 ) -> FalkorGraphStore:
     global _graph_store
 
-    if _FalkorGraphStore is None:
+    if FalkorGraphStore is None:
         raise ModuleNotFoundError(
             "FalkorGraphStore requires the 'graph' extra.\n"
             "Install it with:\n"
@@ -80,7 +78,7 @@ async def get_graph_store(
                     except AttributeError:
                         pass
 
-                _graph_store = _FalkorGraphStore(
+                _graph_store = FalkorGraphStore(
                     host=final_host,
                     port=int(final_port),
                     graph_name=final_graph,

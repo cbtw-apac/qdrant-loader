@@ -830,9 +830,7 @@ class ConfluenceConnector(BaseConnector):
                 for content in results:
                     if self._should_process_content(content):
                         try:
-                            document = self._process_content(
-                                content, clean_html=True
-                            )
+                            document = self._process_content(content, clean_html=True)
                             if document:
                                 yield document
 
@@ -871,9 +869,7 @@ class ConfluenceConnector(BaseConnector):
                     query_params = parse_qs(parsed_url.query)
                     cursor = query_params.get("cursor", [None])[0]
                     if not cursor:
-                        logger.debug(
-                            "No cursor found in next URL, ending pagination"
-                        )
+                        logger.debug("No cursor found in next URL, ending pagination")
                         break
                     logger.debug(f"Found next cursor: {cursor}")
                 except (ValueError, KeyError, AttributeError) as e:
@@ -913,9 +909,7 @@ class ConfluenceConnector(BaseConnector):
                 for content in results:
                     if self._should_process_content(content):
                         try:
-                            document = self._process_content(
-                                content, clean_html=True
-                            )
+                            document = self._process_content(content, clean_html=True)
                             if document:
                                 yield document
 

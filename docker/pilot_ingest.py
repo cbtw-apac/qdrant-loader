@@ -4,9 +4,10 @@ EXPERIMENT with Jira DC / Jira Cloud
 pilot_ingest.py — Run qdrant-loader but only ingest first MAX_ISSUES issue.
 """
 
-from datetime import datetime
-import sys
 import os
+import sys
+from datetime import datetime
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,8 +21,12 @@ except ValueError:
     sys.exit(1)
 
 # Monkey-patch before import pipeline
-from qdrant_loader.connectors.jira import data_center_connector as jira_dc_connector  # noqa: E402, I001
-from qdrant_loader.connectors.jira import cloud_connector as jira_cloud_connector  # noqa: E402, I001
+from qdrant_loader.connectors.jira import (
+    data_center_connector as jira_dc_connector,
+)  # noqa: E402, I001
+from qdrant_loader.connectors.jira import (
+    cloud_connector as jira_cloud_connector,
+)  # noqa: E402, I001
 
 _original_dc_get_issues = jira_dc_connector.JiraDataCenterConnector.get_issues
 _original_cloud_get_issues = jira_cloud_connector.JiraCloudConnector.get_issues
@@ -71,6 +76,15 @@ jira_cloud_connector.JiraCloudConnector.get_issues = _limited_cloud_get_issues
 # are only available when running through the CLI, and are not fully supported via direct function calls.
 from qdrant_loader.cli.cli import cli  # noqa: E402, I001
 
-sys.argv = ["qdrant-loader", "serve", "--config", "config.yaml", "--env", ".env", "--host", "0.0.0.0"]
+sys.argv = [
+    "qdrant-loader",
+    "serve",
+    "--config",
+    "config.yaml",
+    "--env",
+    ".env",
+    "--host",
+    "0.0.0.0",
+]
 
 cli()

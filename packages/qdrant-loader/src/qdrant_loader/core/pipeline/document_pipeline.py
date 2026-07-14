@@ -89,7 +89,7 @@ class DocumentPipeline:
         # 2. Prepare dedup storage
         # ---------------------------
         nodes_dict: dict[str, Any] = {}
-        edges_dict: dict[tuple[str, str, str], Any] = {}
+        edges_dict: dict[tuple[str, str, str, str | None], Any] = {}
 
         # Optional: group by source_type for efficiency
         grouped_docs: dict[str, list[Document]] = defaultdict(list)
@@ -116,7 +116,13 @@ class DocumentPipeline:
 
                         if getattr(subgraph, "edges", None):
                             for edge in subgraph.edges:
-                                edge_key = (edge.source, edge.target, edge.edge_type)
+                                kind = (edge.properties or {}).get("kind")
+                                edge_key = (
+                                    edge.source,
+                                    edge.target,
+                                    edge.edge_type,
+                                    kind,
+                                )
                                 edges_dict[edge_key] = edge
 
                     except Exception as e:
@@ -176,13 +182,13 @@ class DocumentPipeline:
                 len(nodes_batch),
                 len(edges_batch),
             )
-            logger.info("=== NODES ===")
+            logger.debug("=== NODES ===")
             for i, node in enumerate(nodes_batch, start=1):
-                logger.info("Node %s: %s", i, node)
+                logger.debug("Node %s: %s", i, node)
 
-            logger.info("=== EDGES ===")
+            logger.debug("=== EDGES ===")
             for i, edge in enumerate(edges_batch, start=1):
-                logger.info("Edge %s: %s", i, edge)
+                logger.debug("Edge %s: %s", i, edge)
         except Exception as e:
             logger.error(
                 "⚠️ Graph upsert failed (non-fatal): %s",

@@ -14,6 +14,7 @@ from qdrant_loader.connectors.jira.config import (
     JiraProjectConfig,
 )
 from qdrant_loader.connectors.jira.data_center_connector import JiraDataCenterConnector
+from qdrant_loader.connectors.jira.mappers import parse_issue
 from qdrant_loader.connectors.jira.models import (
     JiraIssue,
 )
@@ -1385,3 +1386,143 @@ class TestFetchById:
                 ]
 
         assert entity_ids == ["TEST-1"]
+
+
+class TestJiraLinkedIssuesMapping:
+    """Linked issues must preserve direction and relationship type, including inward-only links."""
+
+    def _base_fields(self, issuelinks):
+        return {
+            "summary": "Test issue",
+            "created": "2024-01-01T00:00:00.000+0000",
+            "updated": "2024-01-02T00:00:00.000+0000",
+            "reporter": {"accountId": "acc-1", "displayName": "Reporter"},
+            "issuetype": {"name": "Bug"},
+            "status": {"name": "Open"},
+            "project": {"key": "TEST"},
+            "issuelinks": issuelinks,
+        }
+
+    def test_outward_link_captures_type_and_relation(self):
+        raw_issue = {
+            "id": "1",
+            "key": "TEST-1",
+            "fields": self._base_fields(
+                [
+                    {
+                        "type": {
+                            "name": "Cloners",
+                            "inward": "is cloned by",
+                            "outward": "clones",
+                        },
+                        "outwardIssue": {"key": "TEST-2"},
+                    }
+                ]
+            ),
+        }
+
+        issue = parse_issue(raw_issue)
+
+        assert issue.linked_issues == ["TEST-2"]
+        assert len(issue.linked_issue_details) == 1
+        link = issue.linked_issue_details[0]
+        assert link.key == "TEST-2"
+        assert link.link_type == "Cloners"
+        assert link.direction == "outward"
+        assert link.relation == "clones"
+
+    def test_inward_only_link_is_not_dropped(self):
+        """Previously, links where this issue is only the inward side (e.g. "is cloned by")
+        were silently discarded because the mapper only read `outwardIssue`."""
+        raw_issue = {
+            "id": "1",
+            "key": "TEST-1",
+            "fields": self._base_fields(
+                [
+                    {
+                        "type": {
+                            "name": "Cloners",
+                            "inward": "is cloned by",
+                            "outward": "clones",
+                        },
+                        "inwardIssue": {"key": "TEST-3"},
+                    }
+                ]
+            ),
+        }
+
+        issue = parse_issue(raw_issue)
+
+        assert issue.linked_issues == ["TEST-3"]
+        assert len(issue.linked_issue_details) == 1
+        link = issue.linked_issue_details[0]
+        assert link.key == "TEST-3"
+        assert link.link_type == "Cloners"
+        assert link.direction == "inward"
+        assert link.relation == "is cloned by"
+
+    def test_both_directions_present_on_same_issue(self):
+        """Matches the reported scenario: one issue clones another and is cloned by a third."""
+        raw_issue = {
+            "id": "1",
+            "key": "TEST-1",
+            "fields": self._base_fields(
+                [
+                    {
+                        "type": {
+                            "name": "Cloners",
+                            "inward": "is cloned by",
+                            "outward": "clones",
+                        },
+                        "outwardIssue": {"key": "TEST-2"},
+                    },
+                    {
+                        "type": {
+                            "name": "Cloners",
+                            "inward": "is cloned by",
+                            "outward": "clones",
+                        },
+                        "inwardIssue": {"key": "TEST-3"},
+                    },
+                ]
+            ),
+        }
+
+        issue = parse_issue(raw_issue)
+
+        assert set(issue.linked_issues) == {"TEST-2", "TEST-3"}
+
+        by_key = {link.key: link for link in issue.linked_issue_details}
+        assert set(by_key) == {"TEST-2", "TEST-3"}
+        assert by_key["TEST-2"].direction == "outward"
+        assert by_key["TEST-2"].relation == "clones"
+        assert by_key["TEST-3"].direction == "inward"
+        assert by_key["TEST-3"].relation == "is cloned by"
+
+    def test_connector_serializes_linked_issues_legacy_and_detailed_metadata(
+        self, jira_cloud_config, mock_cloud_issue_data
+    ):
+        connector = JiraCloudConnector(jira_cloud_config)
+        issue = connector._parse_issue(mock_cloud_issue_data)
+
+        documents = []
+
+        async def _collect():
+            async for doc in connector._stream_issues_to_documents(
+                [issue], include_attachments=False
+            ):
+                documents.append(doc)
+
+        import asyncio
+
+        asyncio.run(_collect())
+
+        assert documents[0].metadata["linked_issues"] == ["TEST-3"]
+        assert documents[0].metadata["linked_issue_details"] == [
+            {
+                "key": "TEST-3",
+                "link_type": None,
+                "direction": "outward",
+                "relation": None,
+            }
+        ]

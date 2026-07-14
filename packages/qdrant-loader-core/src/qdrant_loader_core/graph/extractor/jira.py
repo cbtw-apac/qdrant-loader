@@ -34,13 +34,9 @@ class JiraEntityExtractor(BaseEntityExtractor):
     """
 
     # NOTE:
-    # Jira API currently provides `linked_issues` as list[str] without relationship types
-    # (e.g., "blocks", "duplicates", etc.), so we default to "kind=related".
-    # This can be enhanced when richer link metadata becomes available.
-
-    # Additionally, epic relationships are not implemented because the current data model
-    # does not include an `epic_key` or equivalent field. Support for epic-child relationships
-    # can be added once such metadata is available.
+    # `parent_key` covers both subtask-of-parent and story/task-of-epic relations
+    # (Jira surfaces both through the same "parent" field); the PART_OF edge's
+    # "kind" is derived from issue_type to distinguish the two.
 
     source_type = "jira"
 
@@ -257,16 +253,36 @@ class JiraEntityExtractor(BaseEntityExtractor):
         # Linked Issues
         # --------------------------------------------------------------
 
-        for issue_key in metadata.get("linked_issues", []):
+        # linked_issue_details carries relation/direction; linked_issues is the
+        # legacy plain-key list kept for documents indexed before that field existed.
+        links = metadata.get("linked_issue_details") or metadata.get(
+            "linked_issues", []
+        )
+        for link in links:
+            if isinstance(link, dict):
+                target_key = link.get("key")
+                kind = link.get("relation") or link.get("link_type") or "related"
+                direction = link.get("direction")
+            else:
+                # Backward-compat: plain issue key string, no type/direction info.
+                target_key = link
+                kind = "related"
+                direction = None
+
+            if not target_key:
+                continue
+
+            properties = {"kind": kind}
+            if direction:
+                properties["direction"] = direction
+
             edges.append(
                 GraphEdge(
                     source=metadata.get("key"),
-                    target=issue_key,
+                    target=target_key,
                     edge_type=CoreEdgeType.LINKS_TO.value,
                     project=project,
-                    properties={
-                        "kind": "related",
-                    },
+                    properties=properties,
                 )
             )
         # --------------------------------------------------------------
@@ -276,6 +292,12 @@ class JiraEntityExtractor(BaseEntityExtractor):
         parent_issue = metadata.get("parent_key")
 
         if parent_issue:
+            # Jira's "parent" field means "subtask of" for issue_type=Sub-task, but
+            # for other types (Story/Task/Bug) it means "child of an Epic" instead —
+            # derive the relation from issue_type rather than assuming subtask.
+            issue_type = (metadata.get("issue_type") or "").strip().lower()
+            kind = "subtask" if issue_type in {"sub-task", "subtask"} else "child"
+
             edges.append(
                 GraphEdge(
                     source=metadata.get("key"),
@@ -283,7 +305,7 @@ class JiraEntityExtractor(BaseEntityExtractor):
                     edge_type=CoreEdgeType.PART_OF.value,
                     project=project,
                     properties={
-                        "kind": "subtask",
+                        "kind": kind,
                     },
                 )
             )

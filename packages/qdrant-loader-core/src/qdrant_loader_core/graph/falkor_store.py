@@ -9,6 +9,7 @@ from typing import Any
 
 from falkordb import FalkorDB
 
+from .base import GraphStore
 from .models import (
     CoreEdgeType,
     CoreNodeLabel,
@@ -16,7 +17,8 @@ from .models import (
     GraphNode,
     SubGraph,
 )
-from .store import GraphStore
+
+MAX_ROWS = 5000
 
 
 class FalkorGraphStore(GraphStore):
@@ -43,33 +45,38 @@ class FalkorGraphStore(GraphStore):
         if edge.edge_type not in {e.value for e in CoreEdgeType}:
             raise ValueError(f"Invalid edge type: {edge.edge_type}")
 
+    def _node_payload(self, node: GraphNode) -> dict[str, Any]:
+        props = self._clean_props(node.properties or {})
+        # Pop (not get): project is the MERGE identity key, resolved once here.
+        # Leaving it in props would let `SET n += props` overwrite that identity
+        # right after MERGE if node.project differs from the stale properties value.
+        props_project = props.pop("project", None)
+        return {
+            "id": node.id,
+            "project": node.project or props_project,
+            "props": props,
+        }
+
     async def upsert_node(self, node: GraphNode) -> None:
         self._validate_node(node)
 
-        props = self._clean_props(node.properties or {})
-        project = node.project or props.get("project")
+        payload = self._node_payload(node)
 
-        if project is not None:
+        # Match by (id, project) only, not label, so this MERGE can enrich a stub node an edge upsert already created.
+        if payload["project"] is not None:
             query = f"""
-            MERGE (n:{node.label} {{id: $id, project: $project}})
+            MERGE (n {{id: $id, project: $project}})
+            SET n:{node.label}
             SET n += $props
             """
-            params = {
-                "id": node.id,
-                "project": project,
-                "props": props,
-            }
         else:
             query = f"""
-            MERGE (n:{node.label} {{id: $id}})
+            MERGE (n {{id: $id}})
+            SET n:{node.label}
             SET n += $props
             """
-            params = {
-                "id": node.id,
-                "props": props,
-            }
 
-        await self._run_query(query, params)
+        await self._run_query(query, payload)
 
     async def upsert_nodes_batch(self, nodes: list[GraphNode]) -> None:
         if not nodes:
@@ -82,14 +89,7 @@ class FalkorGraphStore(GraphStore):
 
         tasks = []
         for label, group_nodes in grouped.items():
-            payload = [
-                {
-                    "id": node.id,
-                    "project": node.project or (node.properties or {}).get("project"),
-                    "props": self._clean_props(node.properties or {}),
-                }
-                for node in group_nodes
-            ]
+            payload = [self._node_payload(node) for node in group_nodes]
             with_project = [n for n in payload if n["project"] is not None]
             without_project = [n for n in payload if n["project"] is None]
 
@@ -98,7 +98,8 @@ class FalkorGraphStore(GraphStore):
                     self._run_query(
                         f"""
                         UNWIND $nodes AS node
-                        MERGE (n:{label} {{id: node.id, project: node.project}})
+                        MERGE (n {{id: node.id, project: node.project}})
+                        SET n:{label}
                         SET n += node.props
                         """,
                         {"nodes": with_project},
@@ -110,7 +111,8 @@ class FalkorGraphStore(GraphStore):
                     self._run_query(
                         f"""
                         UNWIND $nodes AS node
-                        MERGE (n:{label} {{id: node.id}})
+                        MERGE (n {{id: node.id}})
+                        SET n:{label}
                         SET n += node.props
                         """,
                         {"nodes": without_project},
@@ -120,31 +122,66 @@ class FalkorGraphStore(GraphStore):
         if tasks:
             await asyncio.gather(*tasks)
 
-    async def upsert_edge(self, edge: GraphEdge) -> None:
-        self._validate_edge(edge)
+    def _edge_payload(self, edge: GraphEdge) -> dict[str, Any]:
         props = self._clean_props(edge.properties or {})
-        project = edge.project or props.get("project")
-        params = {
+        # Pop (not get): project is the MERGE identity key, resolved once here.
+        # Leaving it in props would let `SET r += props` overwrite that identity
+        # right after MERGE if edge.project differs from the stale properties value.
+        props_project = props.pop("project", None)
+        return {
             "source": edge.source,
             "target": edge.target,
+            "project": edge.project or props_project,
             "props": props,
         }
-        if project is not None:
-            params["project"] = project
+
+    async def upsert_edge(self, edge: GraphEdge) -> None:
+        self._validate_edge(edge)
+        payload = self._edge_payload(edge)
+
+        # MERGE (not MATCH) the endpoints: the target of an edge (e.g. a linked
+        # Jira issue) may not have been ingested yet. MATCH would silently drop
+        # the edge with zero rows and no error; MERGE creates an unlabeled stub
+        # node instead, which upsert_node later enriches with its real label.
+        rel_pattern = (
+            f"r:{edge.edge_type} {{kind: $props.kind}}"
+            if "kind" in payload["props"]
+            else f"r:{edge.edge_type}"
+        )
+        if payload["project"] is not None:
             query = f"""
-            MATCH (a {{id: $source, project: $project}}),
-                (b {{id: $target, project: $project}})
-            MERGE (a)-[r:{edge.edge_type}]->(b)
+            MERGE (a {{id: $source, project: $project}})
+            MERGE (b {{id: $target, project: $project}})
+            MERGE (a)-[{rel_pattern}]->(b)
             SET r += $props
+            SET r.project = $project
             """
         else:
             query = f"""
-            MATCH (a {{id: $source}}),
-                (b {{id: $target}})
-            MERGE (a)-[r:{edge.edge_type}]->(b)
+            MERGE (a {{id: $source}})
+            MERGE (b {{id: $target}})
+            MERGE (a)-[{rel_pattern}]->(b)
             SET r += $props
             """
-        await self._run_query(query, params)
+        await self._run_query(query, payload)
+
+    def _edge_batch_query(self, rel_pattern: str, with_project: bool) -> str:
+        if with_project:
+            endpoint_a = "a {id: e.source, project: e.project}"
+            endpoint_b = "b {id: e.target, project: e.project}"
+            set_project = "SET r.project = e.project"
+        else:
+            endpoint_a = "a {id: e.source}"
+            endpoint_b = "b {id: e.target}"
+            set_project = ""
+        return f"""
+        UNWIND $edges AS e
+        MERGE ({endpoint_a})
+        MERGE ({endpoint_b})
+        MERGE (a)-[{rel_pattern}]->(b)
+        SET r += e.props
+        {set_project}
+        """
 
     async def upsert_edges_batch(
         self,
@@ -160,45 +197,34 @@ class FalkorGraphStore(GraphStore):
 
         tasks = []
         for edge_type, group_edges in grouped.items():
-            payload = [
-                {
-                    "source": edge.source,
-                    "target": edge.target,
-                    "project": edge.project or (edge.properties or {}).get("project"),
-                    "props": self._clean_props(edge.properties or {}),
-                }
-                for edge in group_edges
-            ]
+            payload = [self._edge_payload(edge) for edge in group_edges]
 
-            with_project = [e for e in payload if e["project"] is not None]
-            without_project = [e for e in payload if e["project"] is None]
+            typed = [e for e in payload if "kind" in e["props"]]
+            untyped = [e for e in payload if "kind" not in e["props"]]
 
-            if with_project:
-                tasks.append(
-                    self._run_query(
-                        f"""
-                    UNWIND $edges AS e
-                    MATCH (a {{id: e.source, project: e.project}})
-                    MATCH (b {{id: e.target, project: e.project}})
-                    MERGE (a)-[r:{edge_type}]->(b)
-                    SET r += e.props
-                    """,
-                        {"edges": with_project},
+            for group, rel_pattern in (
+                (typed, f"r:{edge_type} {{kind: e.props.kind}}"),
+                (untyped, f"r:{edge_type}"),
+            ):
+                if not group:
+                    continue
+                with_project = [e for e in group if e["project"] is not None]
+                without_project = [e for e in group if e["project"] is None]
+
+                if with_project:
+                    tasks.append(
+                        self._run_query(
+                            self._edge_batch_query(rel_pattern, with_project=True),
+                            {"edges": with_project},
+                        )
                     )
-                )
-            if without_project:
-                tasks.append(
-                    self._run_query(
-                        f"""
-                    UNWIND $edges AS e
-                    MATCH (a {{id: e.source}})
-                    MATCH (b {{id: e.target}})
-                    MERGE (a)-[r:{edge_type}]->(b)
-                    SET r += e.props
-                    """,
-                        {"edges": without_project},
+                if without_project:
+                    tasks.append(
+                        self._run_query(
+                            self._edge_batch_query(rel_pattern, with_project=False),
+                            {"edges": without_project},
+                        )
                     )
-                )
         if tasks:
             await asyncio.gather(*tasks)
 
@@ -218,7 +244,6 @@ class FalkorGraphStore(GraphStore):
                 raise ValueError(f"Invalid edge types: {invalid}")
             edge_filter = ":" + "|".join(edge_types)
         params = {"id": node_id}
-        MAX_ROWS = 5000
         if project:
             params["project"] = project
             query = f"""

@@ -21,7 +21,9 @@ def postgres_url():
     try:
         from testcontainers.postgres import PostgresContainer
     except ImportError:
-        pytest.skip("testcontainers not installed; set TEST_POSTGRES_URL to run PG tests")
+        pytest.skip(
+            "testcontainers not installed; set TEST_POSTGRES_URL to run PG tests"
+        )
         return
 
     try:

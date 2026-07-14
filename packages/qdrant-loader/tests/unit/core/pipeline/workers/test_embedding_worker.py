@@ -643,7 +643,12 @@ class TestEmbeddingWorker:
         assert [chunk.id for chunk, _ in results] == [c.id for c in chunks]
         # Even-indexed batches failed -> None; odd-indexed succeeded.
         assert [emb is None for _, emb in results] == [
-            True, False, True, False, True, False,
+            True,
+            False,
+            True,
+            False,
+            True,
+            False,
         ]
 
     @pytest.mark.asyncio

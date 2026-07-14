@@ -30,9 +30,7 @@ class EmbeddingWorker(BaseWorker):
         self.embedding_service = embedding_service
         self.shutdown_event = shutdown_event or asyncio.Event()
 
-    async def process(
-        self, chunks: list[Any]
-    ) -> list[tuple[Any, list[float] | None]]:
+    async def process(self, chunks: list[Any]) -> list[tuple[Any, list[float] | None]]:
         """Process a batch of chunks into embeddings.
 
         The result is aligned 1:1 with ``chunks``: a chunk whose embedding

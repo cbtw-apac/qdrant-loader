@@ -245,7 +245,9 @@ class AsyncIngestionPipeline:
             },
         )
 
-        processed_count = 0  # Initialize to avoid UnboundLocalError in exception handler
+        processed_count = (
+            0  # Initialize to avoid UnboundLocalError in exception handler
+        )
         try:
             logger.debug("Starting document processing with new pipeline architecture")
 
