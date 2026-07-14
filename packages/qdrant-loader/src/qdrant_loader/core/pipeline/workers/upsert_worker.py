@@ -315,9 +315,7 @@ class UpsertWorker(BaseWorker):
             PipelineResult with processing statistics
         """
         logger.debug("UpsertWorker started")
-        logger.info(
-            f"🔄 Starting upsert processing (max_workers={self.max_workers})..."
-        )
+        logger.info("🔄 Starting upsert processing", max_workers=self.max_workers)
         result = PipelineResult()
         seen_chunk_ids: set[str] = set()
         doc_totals: dict[str, int] = {}
