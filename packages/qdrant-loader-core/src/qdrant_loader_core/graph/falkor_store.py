@@ -9,6 +9,7 @@ from typing import Any
 
 from falkordb import FalkorDB
 
+from .base import GraphStore
 from .models import (
     CoreEdgeType,
     CoreNodeLabel,
@@ -16,7 +17,6 @@ from .models import (
     GraphNode,
     SubGraph,
 )
-from .base import GraphStore
 
 MAX_ROWS = 5000
 
@@ -62,10 +62,7 @@ class FalkorGraphStore(GraphStore):
 
         payload = self._node_payload(node)
 
-        # Match by (id, project) only, not label: an edge upsert may have already
-        # created a stub node for this id before its real label was known. Adding
-        # the label via SET (instead of matching on it) lets this MERGE find and
-        # enrich that stub rather than creating a duplicate node.
+        # Match by (id, project) only, not label, so this MERGE can enrich a stub node an edge upsert already created.
         if payload["project"] is not None:
             query = f"""
             MERGE (n {{id: $id, project: $project}})
@@ -168,6 +165,24 @@ class FalkorGraphStore(GraphStore):
             """
         await self._run_query(query, payload)
 
+    def _edge_batch_query(self, rel_pattern: str, with_project: bool) -> str:
+        if with_project:
+            endpoint_a = "a {id: e.source, project: e.project}"
+            endpoint_b = "b {id: e.target, project: e.project}"
+            set_project = "SET r.project = e.project"
+        else:
+            endpoint_a = "a {id: e.source}"
+            endpoint_b = "b {id: e.target}"
+            set_project = ""
+        return f"""
+        UNWIND $edges AS e
+        MERGE ({endpoint_a})
+        MERGE ({endpoint_b})
+        MERGE (a)-[{rel_pattern}]->(b)
+        SET r += e.props
+        {set_project}
+        """
+
     async def upsert_edges_batch(
         self,
         edges: list[GraphEdge],
@@ -199,27 +214,14 @@ class FalkorGraphStore(GraphStore):
                 if with_project:
                     tasks.append(
                         self._run_query(
-                            f"""
-                        UNWIND $edges AS e
-                        MERGE (a {{id: e.source, project: e.project}})
-                        MERGE (b {{id: e.target, project: e.project}})
-                        MERGE (a)-[{rel_pattern}]->(b)
-                        SET r += e.props
-                        SET r.project = e.project
-                        """,
+                            self._edge_batch_query(rel_pattern, with_project=True),
                             {"edges": with_project},
                         )
                     )
                 if without_project:
                     tasks.append(
                         self._run_query(
-                            f"""
-                        UNWIND $edges AS e
-                        MERGE (a {{id: e.source}})
-                        MERGE (b {{id: e.target}})
-                        MERGE (a)-[{rel_pattern}]->(b)
-                        SET r += e.props
-                        """,
+                            self._edge_batch_query(rel_pattern, with_project=False),
                             {"edges": without_project},
                         )
                     )

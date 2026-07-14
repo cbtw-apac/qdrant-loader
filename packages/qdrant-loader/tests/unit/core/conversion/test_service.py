@@ -24,6 +24,7 @@ from qdrant_loader.core.file_conversion.exceptions import FileConversionError
 
 try:
     import docling as _docling  # noqa: F401
+
     _docling_available = True
 except ModuleNotFoundError:
     _docling_available = False

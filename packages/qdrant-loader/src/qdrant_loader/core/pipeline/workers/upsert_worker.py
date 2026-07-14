@@ -287,9 +287,9 @@ class UpsertWorker(BaseWorker):
         result.errors.extend(errors)
 
         for chunk, _ in batch:
-            chunk_failed = success_count == 0 or str(chunk.id) in dedup[
-                "duplicate_chunk_ids"
-            ]
+            chunk_failed = (
+                success_count == 0 or str(chunk.id) in dedup["duplicate_chunk_ids"]
+            )
             self._note_chunk_outcome(
                 chunk, chunk_failed, result, doc_totals, doc_seen, doc_failed
             )
@@ -315,7 +315,9 @@ class UpsertWorker(BaseWorker):
             PipelineResult with processing statistics
         """
         logger.debug("UpsertWorker started")
-        logger.info(f"🔄 Starting upsert processing (max_workers={self.max_workers})...")
+        logger.info(
+            f"🔄 Starting upsert processing (max_workers={self.max_workers})..."
+        )
         result = PipelineResult()
         seen_chunk_ids: set[str] = set()
         doc_totals: dict[str, int] = {}

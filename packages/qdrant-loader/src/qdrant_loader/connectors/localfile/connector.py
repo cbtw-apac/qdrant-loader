@@ -3,7 +3,6 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from urllib.parse import unquote, urlparse
 
-from qdrant_loader.utils.sensitive import sanitize_exception_message
 from qdrant_loader.connectors.base import BaseConnector, resolve_safe_path
 from qdrant_loader.core.conversion.service import ConversionService
 from qdrant_loader.core.document import Document
@@ -12,6 +11,7 @@ from qdrant_loader.core.file_conversion import (
     FileDetector,
 )
 from qdrant_loader.utils.logging import LoggingConfig
+from qdrant_loader.utils.sensitive import sanitize_exception_message
 
 from .config import LocalFileConfig
 from .file_processor import LocalFileFileProcessor
@@ -235,13 +235,11 @@ class LocalFileConnector(BaseConnector):
         """Fetch a single file by its path relative to the connector's base directory."""
         file_path = resolve_safe_path(self.base_path, entity_id)
         if file_path is None:
-            self.logger.warning(
-                "Path traversal attempt blocked", entity_id=entity_id
-            )
+            self.logger.warning("Path traversal attempt blocked", entity_id=entity_id)
             return None
-        if not os.path.exists(
+        if not os.path.exists(file_path) or not self.file_processor.should_process_file(
             file_path
-        ) or not self.file_processor.should_process_file(file_path):
+        ):
             return None
         try:
             return self._build_file_document(file_path)

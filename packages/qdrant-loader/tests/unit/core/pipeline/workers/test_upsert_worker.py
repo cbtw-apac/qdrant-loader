@@ -760,7 +760,9 @@ class TestUpsertWorker:
         async def embedded_chunks_iterator():
             yield (mock_chunk, None)
 
-        with patch("qdrant_loader.core.pipeline.workers.upsert_worker.prometheus_metrics"):
+        with patch(
+            "qdrant_loader.core.pipeline.workers.upsert_worker.prometheus_metrics"
+        ):
             result = await self.upsert_worker.process_embedded_chunks(
                 embedded_chunks_iterator()
             )
@@ -821,7 +823,9 @@ class TestUpsertWorker:
 
         self.upsert_worker.batch_size = 10  # keep the 2 good chunks in one batch
 
-        with patch("qdrant_loader.core.pipeline.workers.upsert_worker.prometheus_metrics"):
+        with patch(
+            "qdrant_loader.core.pipeline.workers.upsert_worker.prometheus_metrics"
+        ):
             result = await self.upsert_worker.process_embedded_chunks(
                 embedded_chunks_iterator()
             )
@@ -884,13 +888,13 @@ class TestUpsertWorker:
             side_effect=upsert_points_side_effect
         )
 
-        with patch("qdrant_loader.core.pipeline.workers.upsert_worker.prometheus_metrics"):
+        with patch(
+            "qdrant_loader.core.pipeline.workers.upsert_worker.prometheus_metrics"
+        ):
             result = await worker.process_embedded_chunks(embedded_chunks_iterator())
 
         assert result.success_count == 6
-        assert result.successfully_processed_documents == {
-            f"doc{i}" for i in range(6)
-        }
+        assert result.successfully_processed_documents == {f"doc{i}" for i in range(6)}
         # Concurrency never exceeded max_workers, and genuine concurrency
         # (>1) did happen, ruling out an accidental fully sequential
         # implementation.
@@ -1051,9 +1055,6 @@ class TestUpsertWorker:
         assert result.successfully_processed_documents == {"doc1"}
         assert result.failed_document_ids == set()
 
-
-
-
     @pytest.mark.asyncio
     async def test_process_embedded_chunks_cancellation_cancels_in_flight_batches(
         self,
@@ -1080,9 +1081,7 @@ class TestUpsertWorker:
                 cancelled.append(points)
                 raise
 
-        self.mock_qdrant_manager.upsert_points = AsyncMock(
-            side_effect=blocking_upsert
-        )
+        self.mock_qdrant_manager.upsert_points = AsyncMock(side_effect=blocking_upsert)
 
         chunks = [_make_chunk(f"chunk{i}") for i in range(3)]
 

@@ -1,10 +1,10 @@
 """Data models for Jira connector."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
-from typing import Literal
 
 class JiraUser(BaseModel):
     """Jira user model."""
@@ -44,7 +44,8 @@ class JiraIssueLink(BaseModel):
         None, description="Jira link type name (e.g. 'Blocks', 'Cloners')"
     )
     direction: Literal["inward", "outward"] = Field(
-        ..., description="Direction of the link relative to this issue: 'inward' or 'outward'"
+        ...,
+        description="Direction of the link relative to this issue: 'inward' or 'outward'",
     )
     relation: str | None = Field(
         None,

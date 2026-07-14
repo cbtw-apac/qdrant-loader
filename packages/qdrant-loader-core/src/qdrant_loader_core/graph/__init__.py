@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from .schema.utils import init_schema
 from .base import GraphEdge, GraphNode, GraphStore, SubGraph
+from .schema.utils import init_schema
 
 if TYPE_CHECKING:
     from .falkor_store import FalkorGraphStore

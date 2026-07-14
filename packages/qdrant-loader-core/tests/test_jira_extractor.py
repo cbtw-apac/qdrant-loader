@@ -163,9 +163,7 @@ async def test_jira_parent_edge_kind_derived_from_issue_type():
     subtask_result = await extractor.extract(subtask_doc)
     story_result = await extractor.extract(story_doc)
 
-    subtask_edge = next(
-        e for e in subtask_result.edges if e.edge_type == "PART_OF"
-    )
+    subtask_edge = next(e for e in subtask_result.edges if e.edge_type == "PART_OF")
     story_edge = next(e for e in story_result.edges if e.edge_type == "PART_OF")
 
     assert subtask_edge.properties["kind"] == "subtask"

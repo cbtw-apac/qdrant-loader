@@ -315,9 +315,7 @@ async def _serve_main(
         except TimeoutError:
             # uvicorn didn't honour should_exit (e.g. stuck request or lifespan
             # hook); cancel everything outright so the process can still exit.
-            logger.warning(
-                "serve.shutdown_timeout", timeout=SHUTDOWN_TIMEOUT_SECONDS
-            )
+            logger.warning("serve.shutdown_timeout", timeout=SHUTDOWN_TIMEOUT_SECONDS)
             for task in remaining_tasks:
                 task.cancel()
             await asyncio.gather(*remaining_tasks, return_exceptions=True)

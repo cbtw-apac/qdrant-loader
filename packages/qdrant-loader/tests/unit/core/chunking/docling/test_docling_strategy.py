@@ -232,9 +232,7 @@ def test_chunk_document_enriches_each_chunk_metadata():
 def test_chunk_document_attaches_empty_shape_when_enrichment_disabled():
     """Parity with markdown: disabled enrichment still yields the empty-shape keys."""
     mapper = _EchoMapper()
-    enricher = _RecordingEnricher(
-        {"entities": [], "topics": [], "key_phrases": []}
-    )
+    enricher = _RecordingEnricher({"entities": [], "topics": [], "key_phrases": []})
     strategy = _capped_strategy(
         _FakeChunker(count=1), mapper, max_chunks=500, enricher=enricher
     )
@@ -251,9 +249,7 @@ def test_chunk_document_fits_topics_before_enriching():
     any per-chunk enrichment — so each chunk infers against one front-loaded model
     instead of training a degenerate single-chunk LDA."""
     mapper = _EchoMapper()
-    enricher = _RecordingEnricher(
-        {"entities": [], "topics": [], "key_phrases": []}
-    )
+    enricher = _RecordingEnricher({"entities": [], "topics": [], "key_phrases": []})
     strategy = _capped_strategy(
         _FakeChunker(count=3), mapper, max_chunks=500, enricher=enricher
     )
