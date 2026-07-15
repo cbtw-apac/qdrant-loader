@@ -36,7 +36,6 @@ classifiers = [
 dependencies = [
     "pydantic>=2.0.0",
     "structlog>=23.0.0",
-    "FalkorDB>=1.0",
 ]
 
 [project.optional-dependencies]

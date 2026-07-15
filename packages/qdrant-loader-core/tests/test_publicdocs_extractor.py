@@ -39,3 +39,62 @@ async def test_public_webpage():
     assert any(
         e.edge_type == "HAS_ATTACHMENT" for e in result.edges
     ), "HAS_ATTACHMENT edge missing"
+
+
+@pytest.mark.asyncio
+async def test_public_webpage_without_url_has_no_project_or_container():
+    extractor = PublicDocsEntityExtractor()
+
+    doc = Document(
+        title="No URL page",
+        content_type="page",
+        content="content",
+        source_type="publicdocs",
+        source="no-url-source",
+        url="",
+        metadata={},
+    )
+
+    result = await extractor.extract(doc)
+
+    assert not any(n.label == "Container" for n in result.nodes)
+    assert all(n.project is None for n in result.nodes)
+
+
+@pytest.mark.asyncio
+async def test_public_webpage_with_domain_less_url_has_no_container():
+    extractor = PublicDocsEntityExtractor()
+
+    doc = Document(
+        title="Relative URL page",
+        content_type="page",
+        content="content",
+        source_type="publicdocs",
+        source="relative-source",
+        url="not-a-real-url",
+        metadata={"url": "not-a-real-url"},
+    )
+
+    result = await extractor.extract(doc)
+
+    assert not any(n.label == "Container" for n in result.nodes)
+
+
+@pytest.mark.asyncio
+async def test_public_webpage_attachment_missing_id_is_skipped():
+    extractor = PublicDocsEntityExtractor()
+
+    doc = Document(
+        title="Page with malformed attachment",
+        content_type="page",
+        content="content",
+        source_type="publicdocs",
+        source="https://example.com/page5",
+        url="https://example.com/page5",
+        metadata={"attachments": [{"filename": "no_id.pdf"}]},
+    )
+
+    result = await extractor.extract(doc)
+
+    assert not any(n.label == "Attachment" for n in result.nodes)
+    assert not any(e.edge_type == "HAS_ATTACHMENT" for e in result.edges)

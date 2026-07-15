@@ -64,6 +64,19 @@ async def test_ensure_indexes_ignore_existing():
 
 
 @pytest.mark.asyncio
+async def test_ensure_indexes_reraises_unexpected_errors():
+    graph_store = AsyncMock()
+
+    async def mock_query(query, params):
+        raise Exception("connection refused")
+
+    graph_store.query_cypher.side_effect = mock_query
+
+    with pytest.raises(Exception, match="connection refused"):
+        await _ensure_indexes(graph_store)
+
+
+@pytest.mark.asyncio
 async def test_apply_creates_schema_nodes_and_edges():
     graph_store = AsyncMock()
 

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from qdrant_loader.config.graph import GraphConfig
 from qdrant_loader.core.pipeline.document_pipeline import DocumentPipeline
 from qdrant_loader_core.graph.extractor.base_extractor import EntityExtractor
 
@@ -24,10 +25,9 @@ def document():
 
 
 def mock_settings(enabled: bool):
+    graph_cfg = GraphConfig(enabled=enabled)
     return SimpleNamespace(
-        global_config=SimpleNamespace(
-            graph=SimpleNamespace(enabled=enabled),
-        )
+        global_config=SimpleNamespace(graph=graph_cfg),
     )
 
 

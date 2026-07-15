@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from qdrant_loader.config import initialize_config
+from qdrant_loader.config import get_settings, initialize_config
 from qdrant_loader_core.graph import get_graph_store
 
 from ..search.engine import SearchEngine
@@ -26,7 +26,12 @@ logger = LoggingConfig.get_logger("src.mcp.intelligence_handler")
 class IntelligenceHandler:
     """Handler for cross-document intelligence operations."""
 
-    def __init__(self, search_engine: SearchEngine, protocol: MCPProtocol):
+    def __init__(
+        self,
+        search_engine: SearchEngine,
+        protocol: MCPProtocol,
+        config_path: Path | None = None,
+    ):
         """Initialize intelligence handler."""
         self.search_engine = search_engine
         self.protocol = protocol
@@ -37,18 +42,25 @@ class IntelligenceHandler:
         self._lock = asyncio.Lock()
         self._graph_store = None
         self._graph_store_lock = asyncio.Lock()
+        # Resolved by fastmcp_app._lifespan (MCP_CONFIG / --config) so the graph store loads the same config as the search engine.
+        self._config_path = config_path
 
     async def _get_graph_store(self):
         """Lazy-initialize graph store with proper locking."""
         async with self._graph_store_lock:
             if self._graph_store is None:
-                project_root = Path.cwd()
+                config_path = self._config_path or (Path.cwd() / "config.yaml")
+                project_root = config_path.parent
                 initialize_config(
-                    yaml_path=project_root / "config.yaml",
+                    yaml_path=config_path,
                     env_path=project_root / ".env",
                     skip_validation=True,
                 )
-                self._graph_store = await get_graph_store()
+                settings = get_settings()
+                graph_cfg = getattr(settings.global_config, "graph", None)
+                self._graph_store = await get_graph_store(
+                    **(graph_cfg.store_kwargs() if graph_cfg else {})
+                )
             return self._graph_store
 
     async def _run_graph_query(

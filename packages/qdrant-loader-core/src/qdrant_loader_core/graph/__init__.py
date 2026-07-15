@@ -14,11 +14,6 @@ try:
 except ImportError:
     FalkorGraphStore = None
 
-try:
-    from qdrant_loader.config import get_settings
-except ImportError:  # pragma: no cover
-    get_settings = None
-
 
 __all__ = [
     "FalkorGraphStore",
@@ -54,37 +49,13 @@ async def get_graph_store(
                 final_host = host or "localhost"
                 final_port = port if port is not None else 6379
                 final_graph = graph_name or "default_graph"
-                final_max_conn = max_connections
-
-                if get_settings is not None:
-                    try:
-                        settings = get_settings()
-                        graph_cfg = getattr(settings.global_config, "graph", None)
-
-                        if graph_cfg is not None:
-                            if host is None:
-                                final_host = graph_cfg.connection.host
-                            if port is None:
-                                final_port = graph_cfg.connection.port
-                            if graph_name is None:
-                                final_graph = graph_cfg.graph_name
-                            if max_connections is None:
-                                final_max_conn = getattr(
-                                    graph_cfg.pool,
-                                    "max_connections",
-                                    None,
-                                )
-
-                    except AttributeError:
-                        pass
+                final_max_conn = max_connections if max_connections is not None else 10
 
                 _graph_store = FalkorGraphStore(
                     host=final_host,
                     port=int(final_port),
                     graph_name=final_graph,
-                    max_connections=(
-                        final_max_conn if final_max_conn is not None else 10
-                    ),
+                    max_connections=final_max_conn,
                 )
 
                 await init_schema(_graph_store)

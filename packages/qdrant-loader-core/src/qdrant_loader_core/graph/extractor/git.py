@@ -27,11 +27,19 @@ class GitEntityExtractor(BaseEntityExtractor):
 
     source_type = "git"
 
+    @staticmethod
+    def _repository_id(doc: Document) -> str | None:
+        name = doc.metadata.get("repository_name")
+        if not name:
+            return None
+        owner = doc.metadata.get("repository_owner")
+        return f"{owner}/{name}" if owner else name
+
     def _project(
         self,
         doc: Document,
     ) -> str | None:
-        return doc.metadata.get("repository_name")
+        return self._repository_id(doc)
 
     def _build_document_node(
         self,
@@ -71,7 +79,7 @@ class GitEntityExtractor(BaseEntityExtractor):
         self,
         doc: Document,
     ) -> GraphNode | None:
-        repo_name = doc.metadata.get("repository_name")
+        repo_name = self._repository_id(doc)
 
         if not repo_name:
             return None

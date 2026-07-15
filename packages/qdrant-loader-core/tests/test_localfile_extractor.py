@@ -28,3 +28,23 @@ async def test_localfile_basic():
     assert any(n.label == "Document" for n in result.nodes)
     assert any(n.label == "Container" for n in result.nodes)
     assert any(e.edge_type == "BELONGS_TO" for e in result.edges)
+
+
+@pytest.mark.asyncio
+async def test_localfile_without_url_has_no_container():
+    extractor = LocalFileEntityExtractor()
+
+    doc = Document(
+        title="No URL",
+        content_type="page",
+        content="content",
+        source_type="localfile",
+        source="localfile_instance",
+        url="",
+        metadata={"file_name": "notes.md"},
+    )
+
+    result = await extractor.extract(doc)
+
+    assert not any(n.label == "Container" for n in result.nodes)
+    assert not any(e.edge_type == "BELONGS_TO" for e in result.edges)
