@@ -589,7 +589,7 @@ class TestEmbeddingWorker:
 
             consumer.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await consumer
+                await asyncio.wait_for(consumer, timeout=5)
 
             # Wait for cancellation to propagate into both batch tasks (5 s deadline).
             await asyncio.wait_for(all_cancelled.wait(), timeout=5)
@@ -599,7 +599,11 @@ class TestEmbeddingWorker:
             )
         finally:
             hold.set()  # unblock any leaked task so the loop can close cleanly
-            await asyncio.sleep(0)
+            consumer.cancel()
+            try:
+                await asyncio.wait_for(consumer, timeout=5)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
 
     @pytest.mark.asyncio
     async def test_process_chunks_mixed_failures_conserve_all_chunks(self):
