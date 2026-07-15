@@ -441,7 +441,7 @@ uv run python release.py
 
 ## 📄 License
 
-By contributing to QDrant Loader, you agree that your contributions will be licensed under the GNU GPLv3 license.
+By contributing to QDrant Loader, you agree that your contributions will be licensed under the Apache License 2.0.
 
 ---
 

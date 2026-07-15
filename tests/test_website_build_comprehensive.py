@@ -573,23 +573,23 @@ class TestWebsiteBuilderLicenseHandling:
 
         # Create a LICENSE file
         license_file = mock_project_structure / "LICENSE"
-        license_content = """GNU GENERAL PUBLIC LICENSE
-Version 3, 29 June 2007
+        license_content = """Apache License
+    Version 2.0, January 2004
 
-Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
-Everyone is permitted to copy and distribute verbatim copies
-of this license document, but changing it is not allowed."""
+    http://www.apache.org/licenses/
+
+    TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION"""
         license_file.write_text(license_content)
 
         builder.build_license_page(
-            "LICENSE", "LICENSE.html", "License", "GNU GPLv3 License"
+            "LICENSE", "LICENSE.html", "License", "Apache License 2.0"
         )
 
         output_file = mock_project_structure / "site" / "LICENSE.html"
         assert output_file.exists()
 
         content = output_file.read_text()
-        assert "GNU GENERAL PUBLIC LICENSE" in content
+        assert "Apache License" in content
         assert "License Information" in content
 
     def test_build_license_page_missing_file(
