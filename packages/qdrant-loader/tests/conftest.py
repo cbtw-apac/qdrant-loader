@@ -47,7 +47,14 @@ def setup_test_environment():
     # Load test configuration
     tests_dir = Path(__file__).resolve().parent
     config_path = tests_dir / "config.test.yaml"
+    config_template_path = tests_dir / "config.test.template.yaml"
     env_path = tests_dir / ".env.test"
+
+    # If config.test.yaml does not exist, generate it from template.
+    # This allows config.test.yaml to be .gitignore'd while CI/local setups
+    # can still run tests by auto-creating a working config from the template.
+    if not config_path.exists() and config_template_path.exists():
+        shutil.copy(config_template_path, config_path)
 
     # Load environment variables first
     load_dotenv(env_path, override=True)
@@ -56,11 +63,19 @@ def setup_test_environment():
     fallback_env = {
         "LLM_API_KEY": "test-llm-api-key",
         "QDRANT_API_KEY": "test-qdrant-api-key",
+        "QDRANT_URL": "http://localhost:6333",
+        "QDRANT_COLLECTION_NAME": "test_collection",
         "REPO_TOKEN": "test-repo-token",
+        "REPO_URL": "https://github.com/test/test.git",
         "CONFLUENCE_TOKEN": "test-confluence-token",
         "CONFLUENCE_EMAIL": "test@example.com",
+        "CONFLUENCE_URL": "https://test.atlassian.net/wiki",
+        "CONFLUENCE_SPACE_KEY": "TEST",
         "JIRA_TOKEN": "test-jira-token",
         "JIRA_EMAIL": "test@example.com",
+        "JIRA_URL": "https://test.atlassian.net",
+        "JIRA_PROJECT_KEY": "TEST",
+        "OPENAI_API_KEY": "test-openai-api-key",
         "GRAPH_HOST": "localhost",
         "GRAPH_PORT": "6379",
         "GRAPH_NAME": "test_graph",
