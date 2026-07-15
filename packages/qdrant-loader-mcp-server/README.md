@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/qdrant-loader-mcp-server)](https://pypi.org/project/qdrant-loader-mcp-server/)
 [![Python](https://img.shields.io/pypi/pyversions/qdrant-loader-mcp-server)](https://pypi.org/project/qdrant-loader-mcp-server/)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 A Model Context Protocol (MCP) server that brings advanced RAG search to AI development tools. Part of the [QDrant Loader monorepo](../../) ecosystem.
 
@@ -228,7 +228,7 @@ See **[CONTRIBUTING](../../CONTRIBUTING.md)** - Contribution guidelines, develop
 
 ## 📄 License
 
-This project is licensed under the GNU GPLv3 - see the [LICENSE](../../LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](../../LICENSE) file for details.
 
 ---
 

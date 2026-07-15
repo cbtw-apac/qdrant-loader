@@ -542,15 +542,21 @@ class TestEmbeddingWorker:
         self.mock_embedding_service.batch_size = 1
 
         hold = asyncio.Event()
+        all_started = asyncio.Event()
+        all_cancelled = asyncio.Event()
         started: list = []
         cancelled: list = []
 
         async def blocking_get_embeddings(contents):
             started.append(contents)
+            if len(started) >= 2:
+                all_started.set()
             try:
                 await hold.wait()
             except asyncio.CancelledError:
                 cancelled.append(contents)
+                if len(cancelled) >= 2:
+                    all_cancelled.set()
                 raise
             return [[0.1, 0.2, 0.3] for _ in contents]
 
@@ -578,16 +584,15 @@ class TestEmbeddingWorker:
 
         consumer = asyncio.create_task(consume())
         try:
-            # Wait until both batch tasks are genuinely in flight.
-            while len(started) < 2:
-                await asyncio.sleep(0.01)
+            # Wait until both batch tasks are genuinely in flight (5 s deadline).
+            await asyncio.wait_for(all_started.wait(), timeout=5)
 
             consumer.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await consumer
 
-            # Give cancellation a tick to propagate into the batch tasks.
-            await asyncio.sleep(0.05)
+            # Wait for cancellation to propagate into both batch tasks (5 s deadline).
+            await asyncio.wait_for(all_cancelled.wait(), timeout=5)
             assert len(cancelled) == 2, (
                 f"expected both in-flight batches cancelled, got {len(cancelled)}: "
                 f"{cancelled}"

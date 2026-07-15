@@ -846,7 +846,7 @@ class ConfluenceConnector(BaseConnector):
                                     f"Processed {content['type']} '{content['title']}' "
                                     f"(ID: {content['id']}) from space {self.config.space_key}"
                                 )
-                        except (ValueError, KeyError, AttributeError, TypeError) as e:
+                        except Exception as e:
                             logger.error(
                                 "Failed to process Confluence content",
                                 content_type=content.get("type"),
@@ -925,7 +925,7 @@ class ConfluenceConnector(BaseConnector):
                                     f"Processed {content['type']} '{content['title']}' "
                                     f"(ID: {content['id']}) from space {self.config.space_key}"
                                 )
-                        except (ValueError, KeyError, AttributeError, TypeError) as e:
+                        except Exception as e:
                             logger.error(
                                 "Failed to process Confluence content",
                                 content_type=content.get("type"),

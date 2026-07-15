@@ -85,10 +85,12 @@ async def test_claim_next_no_duplicate_claims_across_queue_instances(
     sqlite_job_queue: SQLiteJobQueue,
 ):
     # Simulate multiple independent workers/processes sharing the same DB.
+    # Each instance gets its own lock (as in production) to exercise
+    # cross-instance atomicity rather than trivially serialising via one lock.
     queues = [sqlite_job_queue] + [
         SQLiteJobQueue(
             sqlite_job_queue._session_factory,
-            db_op_lock=sqlite_job_queue._db_op_lock,
+            db_op_lock=asyncio.Lock(),
         )
         for _ in range(7)
     ]
