@@ -50,10 +50,9 @@ def setup_test_environment():
     config_template_path = tests_dir / "config.test.template.yaml"
     env_path = tests_dir / ".env.test"
 
-    # If config.test.yaml does not exist, generate it from template.
-    # This allows config.test.yaml to be .gitignore'd while CI/local setups
-    # can still run tests by auto-creating a working config from the template.
-    if not config_path.exists() and config_template_path.exists():
+    # Regenerate config.test.yaml from template on every setup run.
+    # This keeps local ignored files in sync and replaces stale config.
+    if config_template_path.exists():
         shutil.copy(config_template_path, config_path)
 
     # Load environment variables first
