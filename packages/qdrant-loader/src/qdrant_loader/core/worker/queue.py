@@ -172,7 +172,10 @@ class SQLiteJobQueue:
 
             async with self._session_factory() as session:
                 try:
-                    where_clauses = [Job.id == candidate_job_id_subquery, claimable_filter]
+                    where_clauses = [
+                        Job.id == candidate_job_id_subquery,
+                        claimable_filter,
+                    ]
                     if type_filter is not None:
                         where_clauses.append(type_filter)
 

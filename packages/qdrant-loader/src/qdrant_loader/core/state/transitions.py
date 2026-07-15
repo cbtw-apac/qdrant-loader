@@ -213,7 +213,25 @@ async def update_document_states_batch(
             except Exception as e:  # noqa: BLE001 - reported to caller, not swallowed
                 results.append((document, None, e))
 
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as commit_error:  # noqa: BLE001 - return as per-document failures
+            try:
+                await session.rollback()
+            except Exception:
+                # Best-effort rollback; keep the original commit error as the reported cause.
+                pass
+
+            # Commit failed, so no successful writes in this batch were persisted.
+            # Convert previously "successful" items into per-document failures.
+            results = [
+                (
+                    doc,
+                    None,
+                    commit_error if error is None else error,
+                )
+                for doc, _record, error in results
+            ]
 
     return results
 

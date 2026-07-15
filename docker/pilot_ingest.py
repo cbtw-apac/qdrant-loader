@@ -10,6 +10,14 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
+# Monkey-patch before import pipeline
+from qdrant_loader.connectors.jira import (
+    cloud_connector as jira_cloud_connector,
+)  # noqa: E402, I001
+from qdrant_loader.connectors.jira import (
+    data_center_connector as jira_dc_connector,
+)  # noqa: E402, I001
+
 load_dotenv()
 
 try:
@@ -20,13 +28,6 @@ except ValueError:
     print("[pilot_ingest] ERROR: MAX_ISSUES must be an integer")
     sys.exit(1)
 
-# Monkey-patch before import pipeline
-from qdrant_loader.connectors.jira import (
-    data_center_connector as jira_dc_connector,
-)  # noqa: E402, I001
-from qdrant_loader.connectors.jira import (
-    cloud_connector as jira_cloud_connector,
-)  # noqa: E402, I001
 
 _original_dc_get_issues = jira_dc_connector.JiraDataCenterConnector.get_issues
 _original_cloud_get_issues = jira_cloud_connector.JiraCloudConnector.get_issues
