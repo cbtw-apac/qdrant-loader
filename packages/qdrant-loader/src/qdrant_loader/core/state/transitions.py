@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -10,6 +11,7 @@ from qdrant_loader.core.document import Document
 from qdrant_loader.core.state.models import DocumentStateRecord, IngestionHistory
 
 AsyncSessionFactory = Callable[[], Awaitable[Any]]
+logger = logging.getLogger(__name__)
 
 
 async def update_last_ingestion(
@@ -213,7 +215,30 @@ async def update_document_states_batch(
             except Exception as e:  # noqa: BLE001 - reported to caller, not swallowed
                 results.append((document, None, e))
 
-        await session.commit()
+        try:
+            await session.commit()
+        except (
+            Exception
+        ) as commit_error:  # noqa: BLE001 - return as per-document failures
+            try:
+                await session.rollback()
+            except Exception as rollback_error:
+                # Best-effort rollback; keep the original commit error as the reported cause.
+                logger.warning(
+                    "Best-effort rollback failed after batch commit error",
+                    exc_info=rollback_error,
+                )
+
+            # Commit failed, so no successful writes in this batch were persisted.
+            # Convert previously "successful" items into per-document failures.
+            results = [
+                (
+                    doc,
+                    None,
+                    commit_error if error is None else error,
+                )
+                for doc, _record, error in results
+            ]
 
     return results
 

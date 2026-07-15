@@ -3,7 +3,6 @@ State management service for tracking document ingestion state.
 """
 
 import asyncio
-
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 

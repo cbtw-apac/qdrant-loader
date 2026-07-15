@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 from qdrant_loader.config.state import StateManagementConfig
-from qdrant_loader.core.state.session import dispose_engine, initialize_engine_and_session
+from qdrant_loader.core.state.session import (
+    dispose_engine,
+    initialize_engine_and_session,
+)
 from sqlalchemy.pool import StaticPool
 
 
