@@ -263,6 +263,29 @@ class ProjectManager:
                         )
                         source.config_hash = source_config_hash  # type: ignore
                         source.updated_at = now  # type: ignore
+
+                        # The source config changed (e.g. JQL/project_key/path
+                        # filters), so any saved checkpoint cursor was computed
+                        # against the old query and is no longer meaningful.
+                        # Drop it so the next run starts fresh instead of
+                        # silently resuming mid-page against a different query.
+                        if current_source_config_hash is not None:
+                            from qdrant_loader.core.state.checkpoint_manager import (
+                                CheckpointManager,
+                            )
+
+                            try:
+                                await CheckpointManager(session).clear_checkpoint(
+                                    project_id, source_type, source_name
+                                )
+                            except Exception as e:
+                                self.logger.warning(
+                                    "Failed to clear stale checkpoint after "
+                                    "source configuration change",
+                                    source_type=source_type,
+                                    source=source_name,
+                                    error=str(e),
+                                )
                 else:
                     # Create new source
                     self.logger.debug(

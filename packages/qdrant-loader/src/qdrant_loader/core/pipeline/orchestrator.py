@@ -71,6 +71,7 @@ class PipelineOrchestrator:
         project_id: str | None = None,
         seen_uris: set[str] | None = None,
         resume: bool = True,
+        force: bool = False,
     ) -> AsyncIterator[list[Document]]:
         """Stream source documents in bounded micro-batches.
 
@@ -100,7 +101,7 @@ class PipelineOrchestrator:
                 # Determine if we should attempt to resume from a checkpoint
                 checkpoint_cursor = None
                 try:
-                    if resume and project_id is not None:
+                    if resume and not force and project_id is not None:
                         # Lazy import to avoid cycles
                         from qdrant_loader.core.state.checkpoint_manager import (
                             CheckpointManager,
@@ -349,6 +350,7 @@ class PipelineOrchestrator:
                     since,
                     project_id=current_project_id,
                     resume=resume,
+                    force=force,
                 )
 
                 async for batch in stream_iter:
@@ -657,97 +659,6 @@ class PipelineOrchestrator:
                 f"Completed processing all projects: {total_processed_count} total documents"
             )
         return total_processed_count
-
-    async def _collect_documents_from_sources(
-        self,
-        filtered_config: SourcesConfig,
-        project_id: str | None = None,
-        resume: bool = True,
-    ) -> list[Document]:
-        """Collect documents from all configured sources."""
-        documents = []
-
-        # Process each source type with project context
-        async def _connector_factory_for_source_type(source_type_name: str):
-            async def _factory(src_config):
-                checkpoint_cursor = None
-                try:
-                    if resume and project_id is not None:
-                        from qdrant_loader.core.state.checkpoint_manager import (
-                            CheckpointManager,
-                        )
-
-                        async with (
-                            await self.components.state_manager.get_session() as session
-                        ):
-                            cp_mgr = CheckpointManager(session)
-                            cp = await cp_mgr.get_checkpoint(
-                                project_id, source_type_name, src_config.source
-                            )
-                            if cp:
-                                checkpoint_cursor = cp.cursor_value
-                except Exception:
-                    logger.debug(
-                        "Checkpoint lookup failed, proceeding without checkpoint",
-                        source_type=source_type_name,
-                        source=getattr(src_config, "source", None),
-                    )
-                return get_connector_instance(
-                    src_config, checkpoint_cursor=checkpoint_cursor
-                )
-
-            return _factory
-
-        if filtered_config.confluence:
-            confluence_docs = (
-                await self.components.source_processor.process_source_type(
-                    filtered_config.confluence,
-                    await _connector_factory_for_source_type("Confluence"),
-                    "Confluence",
-                )
-            )
-            documents.extend(confluence_docs)
-
-        if filtered_config.git:
-            git_docs = await self.components.source_processor.process_source_type(
-                filtered_config.git, get_connector_instance, "Git"
-            )
-            documents.extend(git_docs)
-
-        if filtered_config.jira:
-            jira_docs = await self.components.source_processor.process_source_type(
-                filtered_config.jira,
-                await _connector_factory_for_source_type("Jira"),
-                "Jira",
-            )
-            documents.extend(jira_docs)
-
-        if filtered_config.publicdocs:
-            publicdocs_docs = (
-                await self.components.source_processor.process_source_type(
-                    filtered_config.publicdocs, get_connector_instance, "PublicDocs"
-                )
-            )
-            documents.extend(publicdocs_docs)
-
-        if filtered_config.localfile:
-            localfile_docs = await self.components.source_processor.process_source_type(
-                filtered_config.localfile,
-                await _connector_factory_for_source_type("LocalFile"),
-                "LocalFile",
-            )
-            documents.extend(localfile_docs)
-
-        # Inject project metadata into documents if project context is available
-        if project_id and self.project_manager:
-            for document in documents:
-                enhanced_metadata = self.project_manager.inject_project_metadata(
-                    project_id, document.metadata
-                )
-                document.metadata = enhanced_metadata
-
-        logger.info(f"📄 Collected {len(documents)} documents from all sources")
-        return documents
 
     async def _detect_document_changes(
         self,

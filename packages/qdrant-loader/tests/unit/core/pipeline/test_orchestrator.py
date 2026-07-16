@@ -147,6 +147,7 @@ class TestPipelineOrchestrator:
             project_id=None,
             seen_uris=None,
             resume=True,
+            force=False,
         ):
             assert filtered_config_arg is filtered_config
             yield mock_documents
@@ -202,6 +203,7 @@ class TestPipelineOrchestrator:
             project_id=None,
             seen_uris=None,
             resume=True,
+            force=False,
         ):
             assert filtered_config_arg is filtered_config
             yield mock_documents
@@ -256,6 +258,7 @@ class TestPipelineOrchestrator:
             project_id=None,
             seen_uris=None,
             resume=True,
+            force=False,
         ):
             assert filtered_config_arg is filtered_config
             yield mock_documents
@@ -339,6 +342,7 @@ class TestPipelineOrchestrator:
             project_id=None,
             seen_uris=None,
             resume=True,
+            force=False,
         ):
             if False:
                 yield []
@@ -376,6 +380,7 @@ class TestPipelineOrchestrator:
             project_id=None,
             seen_uris=None,
             resume=True,
+            force=False,
         ):
             assert filtered_config_arg is filtered_config
             yield mock_documents
@@ -438,6 +443,7 @@ class TestPipelineOrchestrator:
             project_id=None,
             seen_uris=None,
             resume=True,
+            force=False,
         ):
             assert filtered_config_arg is filtered_config
             yield [doc]
@@ -498,94 +504,6 @@ class TestPipelineOrchestrator:
                     sources_config=self.mock_sources_config
                 )
 
-    @pytest.mark.asyncio
-    async def test_collect_documents_from_sources_all_types(self):
-        """Test collecting documents from all source types."""
-        # Setup filtered config with all source types
-        filtered_config = Mock(spec=SourcesConfig)
-        filtered_config.confluence = ["confluence_source"]
-        filtered_config.git = ["git_source"]
-        filtered_config.jira = ["jira_source"]
-        filtered_config.publicdocs = ["publicdocs_source"]
-        filtered_config.localfile = ["localfile_source"]
-
-        # Setup mock documents for each source type
-        confluence_docs = [Mock(spec=Document, id="confluence_doc")]
-        git_docs = [Mock(spec=Document, id="git_doc")]
-        jira_docs = [Mock(spec=Document, id="jira_doc")]
-        publicdocs_docs = [Mock(spec=Document, id="publicdocs_doc")]
-        localfile_docs = [Mock(spec=Document, id="localfile_doc")]
-
-        # Configure source processor mock
-        self.source_processor.process_source_type.side_effect = [
-            confluence_docs,
-            git_docs,
-            jira_docs,
-            publicdocs_docs,
-            localfile_docs,
-        ]
-
-        # Execute
-        result = await self.orchestrator._collect_documents_from_sources(
-            filtered_config, None
-        )
-
-        # Verify
-        expected_docs = (
-            confluence_docs + git_docs + jira_docs + publicdocs_docs + localfile_docs
-        )
-        assert result == expected_docs
-        assert self.source_processor.process_source_type.call_count == 5
-
-    @pytest.mark.asyncio
-    async def test_collect_documents_from_sources_selective(self):
-        """Test collecting documents from selective source types."""
-        # Setup filtered config with only git and confluence
-        filtered_config = Mock(spec=SourcesConfig)
-        filtered_config.confluence = ["confluence_source"]
-        filtered_config.git = ["git_source"]
-        filtered_config.jira = None
-        filtered_config.publicdocs = None
-        filtered_config.localfile = None
-
-        # Setup mock documents
-        confluence_docs = [Mock(spec=Document, id="confluence_doc")]
-        git_docs = [Mock(spec=Document, id="git_doc")]
-
-        self.source_processor.process_source_type.side_effect = [
-            confluence_docs,
-            git_docs,
-        ]
-
-        # Execute
-        result = await self.orchestrator._collect_documents_from_sources(
-            filtered_config, None
-        )
-
-        # Verify
-        expected_docs = confluence_docs + git_docs
-        assert result == expected_docs
-        assert self.source_processor.process_source_type.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_collect_documents_from_sources_empty(self):
-        """Test collecting documents when no sources are configured."""
-        # Setup filtered config with no sources
-        filtered_config = Mock(spec=SourcesConfig)
-        filtered_config.confluence = None
-        filtered_config.git = None
-        filtered_config.jira = None
-        filtered_config.publicdocs = None
-        filtered_config.localfile = None
-
-        # Execute
-        result = await self.orchestrator._collect_documents_from_sources(
-            filtered_config, None
-        )
-
-        # Verify
-        assert result == []
-        self.source_processor.process_source_type.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_detect_document_changes_success(self):
@@ -1051,6 +969,7 @@ class TestPipelineOrchestrator:
             project_id=None,
             seen_uris=None,
             resume=True,
+            force=False,
         ):
             if False:
                 yield []
@@ -1246,3 +1165,137 @@ class TestStreamBatchesCheckpointBehavior:
         assert len(batches[1]) == 2
         for doc in batches[1]:
             assert doc.metadata.get("__ingestion_checkpoint") is not None
+
+
+class TestStreamBatchesForceDisablesCheckpointLookup:
+    """force=True must bypass any saved checkpoint, even when resume=True.
+
+    This is the BULK_INGEST contract (CLI --force, worker BULK_INGEST jobs):
+    a forced run reprocesses everything and must not silently resume mid-page
+    from a checkpoint saved by a prior (possibly interrupted) run.
+    """
+
+    def _make_orchestrator(self) -> PipelineOrchestrator:
+        settings = Mock(spec=Settings)
+        source_processor = AsyncMock(spec=SourceProcessor)
+        source_filter = Mock(spec=SourceFilter)
+        state_manager = AsyncMock(spec=StateManager)
+        state_manager._initialized = True
+        qdrant_manager = AsyncMock(spec=QdrantManager)
+        components = PipelineComponents(
+            document_pipeline=AsyncMock(spec=DocumentPipeline),
+            source_processor=source_processor,
+            source_filter=source_filter,
+            state_manager=state_manager,
+            qdrant_manager=qdrant_manager,
+        )
+        return PipelineOrchestrator(settings, components)
+
+    def _jira_filtered_config(self) -> Mock:
+        cfg = Mock(spec=SourcesConfig)
+        cfg.confluence = None
+        cfg.git = None
+        cfg.jira = {"jira-main": Mock(source="jira-main")}
+        cfg.publicdocs = None
+        cfg.localfile = None
+        return cfg
+
+    def _install_stream_that_calls_factory(self, orchestrator: PipelineOrchestrator):
+        """Replace stream_source_documents with a fake that actually invokes the
+        connector factory per source config, then yields a single document."""
+
+        async def fake_stream(
+            source_configs, connector_factory, source_type, since=None
+        ):
+            for src_config in source_configs.values():
+                await connector_factory(src_config)
+            doc = Mock(spec=Document)
+            doc.id = "d1"
+            doc.source_type = source_type
+            doc.source = "jira-main"
+            doc.url = "https://example.com/doc"
+            doc.metadata = {}
+            yield doc
+
+        orchestrator.components.source_processor.stream_source_documents = fake_stream
+
+    def _patch_saved_checkpoint(self, orchestrator: PipelineOrchestrator):
+        """Make the checkpoint DB lookup return a stale checkpoint if queried."""
+        session = object()
+        session_context = Mock()
+        session_context.__aenter__ = AsyncMock(return_value=session)
+        session_context.__aexit__ = AsyncMock(return_value=None)
+        orchestrator.components.state_manager.get_session = AsyncMock(
+            return_value=session_context
+        )
+
+        stale_checkpoint = Mock(cursor_value="stale-cursor")
+        get_checkpoint = AsyncMock(return_value=stale_checkpoint)
+        return get_checkpoint
+
+    @pytest.mark.asyncio
+    async def test_force_true_bypasses_saved_checkpoint(self):
+        orchestrator = self._make_orchestrator()
+        self._install_stream_that_calls_factory(orchestrator)
+        get_checkpoint = self._patch_saved_checkpoint(orchestrator)
+
+        with (
+            patch(
+                "qdrant_loader.core.state.checkpoint_manager.CheckpointManager"
+            ) as checkpoint_manager_cls,
+            patch(
+                "qdrant_loader.core.pipeline.orchestrator.get_connector_instance"
+            ) as get_connector_instance,
+        ):
+            checkpoint_manager_cls.return_value.get_checkpoint = get_checkpoint
+            get_connector_instance.return_value = Mock()
+
+            batches = [
+                batch
+                async for batch in orchestrator._stream_batches_from_sources(
+                    self._jira_filtered_config(),
+                    project_id="project-1",
+                    resume=True,
+                    force=True,
+                )
+            ]
+
+        assert len(batches) == 1
+        get_checkpoint.assert_not_awaited()
+        _, kwargs = get_connector_instance.call_args
+        assert kwargs["checkpoint_cursor"] is None
+
+    @pytest.mark.asyncio
+    async def test_resume_without_force_uses_saved_checkpoint(self):
+        """Sanity check: the normal (non-forced) resume path is unaffected."""
+        orchestrator = self._make_orchestrator()
+        self._install_stream_that_calls_factory(orchestrator)
+        get_checkpoint = self._patch_saved_checkpoint(orchestrator)
+
+        with (
+            patch(
+                "qdrant_loader.core.state.checkpoint_manager.CheckpointManager"
+            ) as checkpoint_manager_cls,
+            patch(
+                "qdrant_loader.core.pipeline.orchestrator.get_connector_instance"
+            ) as get_connector_instance,
+        ):
+            checkpoint_manager_cls.return_value.get_checkpoint = get_checkpoint
+            get_connector_instance.return_value = Mock()
+
+            batches = [
+                batch
+                async for batch in orchestrator._stream_batches_from_sources(
+                    self._jira_filtered_config(),
+                    project_id="project-1",
+                    resume=True,
+                    force=False,
+                )
+            ]
+
+        assert len(batches) == 1
+        get_checkpoint.assert_awaited_once_with(
+            "project-1", "Jira", "jira-main"
+        )
+        _, kwargs = get_connector_instance.call_args
+        assert kwargs["checkpoint_cursor"] == "stale-cursor"

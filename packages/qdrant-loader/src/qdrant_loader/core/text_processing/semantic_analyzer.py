@@ -1,18 +1,20 @@
 """Semantic analysis module for text processing."""
 
+from __future__ import annotations
+
 import hashlib
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import spacy
 from gensim import corpora
 from gensim.models import LdaModel
 from gensim.parsing.preprocessing import preprocess_string
 from qdrant_loader.core.text_processing import spacy_model_cache
-from spacy.cli.download import download as spacy_download
-from spacy.tokens import Doc
+
+if TYPE_CHECKING:
+    from spacy.tokens import Doc
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,9 @@ class SemanticAnalyzer:
         # ChunkProcessor), and spacy.load() is too expensive to repeat for
         # every one of them.
         def _load_nlp():
+            import spacy
+            from spacy.cli.download import download as spacy_download
+
             try:
                 nlp = spacy.load(spacy_model)
             except OSError:
