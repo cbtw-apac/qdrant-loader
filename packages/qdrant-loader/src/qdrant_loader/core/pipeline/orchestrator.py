@@ -327,7 +327,7 @@ class PipelineOrchestrator:
             # preflight, a job with no changed documents would incorrectly return
             # success even while Qdrant is misconfigured/unreachable.
             try:
-                self.components.qdrant_manager.assert_collection_accessible()
+                await self.components.qdrant_manager.assert_collection_accessible()
             except Exception as e:
                 raise PermanentJobError(
                     f"Qdrant collection is unavailable: {sanitize_exception_message(e)}"
@@ -579,7 +579,9 @@ class PipelineOrchestrator:
     @staticmethod
     def _format_indexing_failure_message(result: PipelineResult) -> str:
         """Build an error message summarizing chunk-level indexing failures."""
-        error_summary = "; ".join(result.errors[:5])
+        error_summary = "; ".join(
+            sanitize_exception_message(error) for error in result.errors[:5]
+        )
         return (
             f"{result.error_count} chunk(s) failed to index into Qdrant "
             f"(out of {result.success_count + result.error_count}): {error_summary}"
