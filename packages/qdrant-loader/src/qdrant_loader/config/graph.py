@@ -36,6 +36,20 @@ class GraphConfig(BaseModel):
         default_factory=GraphPoolConfig, description="Connection pool settings"
     )
 
+    def store_kwargs(self) -> dict:
+        """Kwargs for qdrant_loader_core.graph.get_graph_store()."""
+        return {
+            "host": self.connection.host,
+            "port": self.connection.port,
+            "password": (
+                self.connection.password.get_secret_value()
+                if self.connection.password is not None
+                else None
+            ),
+            "graph_name": self.graph_name,
+            "max_connections": self.pool.max_connections,
+        }
+
     def to_dict(self) -> dict:
         """Convert config to dictionary (useful for client init)."""
         return {

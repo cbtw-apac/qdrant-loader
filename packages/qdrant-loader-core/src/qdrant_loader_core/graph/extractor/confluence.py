@@ -45,18 +45,14 @@ class ConfluenceEntityExtractor(BaseEntityExtractor):
         doc: Document,
         project: str | None,
     ) -> GraphNode:
-        """
-        Build a document node enriched with filesystem metadata.
-        """
-
-        file_name = doc.metadata.get("file_name")
+        """Build a document node for a Confluence page."""
 
         return GraphNode(
             id=doc.id,
             label=CoreNodeLabel.DOCUMENT.value,
             project=project,
             properties={
-                "title": file_name,
+                "title": doc.title,
                 "url": doc.url,
                 "created_at": doc.metadata.get("created_at"),
                 "updated_at": doc.metadata.get("updated_at"),
