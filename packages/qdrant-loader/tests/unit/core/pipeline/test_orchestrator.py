@@ -16,6 +16,7 @@ from qdrant_loader.core.pipeline.source_filter import SourceFilter
 from qdrant_loader.core.pipeline.source_processor import SourceProcessor
 from qdrant_loader.core.qdrant_manager import QdrantManager
 from qdrant_loader.core.state.state_manager import StateManager
+from qdrant_loader.core.worker.handlers import PermanentJobError
 
 
 def make_rich_compatible_mock(*args, **kwargs):
@@ -298,6 +299,163 @@ class TestPipelineOrchestrator:
         mock_change_detector.classify_batch.assert_called_once_with(
             mock_documents, filtered_config, None
         )
+
+    @pytest.mark.asyncio
+    async def test_process_documents_raises_when_indexing_fails(self):
+        """A batch with indexing (upsert) failures must fail the whole job, not report success."""
+        mock_documents = cast(
+            list[Document],
+            [
+                Mock(spec=Document, id="doc1", content="content1"),
+                Mock(spec=Document, id="doc2", content="content2"),
+            ],
+        )
+
+        filtered_config = Mock(spec=SourcesConfig)
+        filtered_config.git = ["git_source"]
+        filtered_config.confluence = None
+        filtered_config.jira = None
+        filtered_config.publicdocs = None
+        filtered_config.localfile = None
+
+        self.source_filter.filter_sources.return_value = filtered_config
+        self.orchestrator._update_document_states = AsyncMock()
+
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+        ):
+            assert filtered_config_arg is filtered_config
+            yield mock_documents
+
+        self.orchestrator._stream_batches_from_sources = fake_stream_batches
+
+        mock_change_detector = AsyncMock()
+        mock_change_detector.classify_batch.return_value = mock_documents
+        state_detector_context = Mock()
+        state_detector_context.__aenter__ = AsyncMock(return_value=mock_change_detector)
+        state_detector_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch(
+            "qdrant_loader.core.pipeline.orchestrator.StateChangeDetector",
+            return_value=state_detector_context,
+        ):
+            mock_result = Mock()
+            mock_result.successfully_processed_documents = {"doc1"}
+            mock_result.success_count = 1
+            mock_result.failure_count = 1
+            mock_result.errors = ["Upsert failed for chunk doc2: connection refused"]
+            mock_result.failed_document_ids = {"doc2"}
+            self.document_pipeline.process_batch.return_value = mock_result
+
+            with pytest.raises(PermanentJobError, match="failed to index into Qdrant"):
+                await self.orchestrator.process_documents(
+                    sources_config=self.mock_sources_config
+                )
+
+        assert self.orchestrator.last_pipeline_result.error_count == 1
+        assert self.orchestrator.last_pipeline_result.success_count == 1
+
+    @pytest.mark.asyncio
+    async def test_process_documents_raises_when_all_documents_fail_to_index(self):
+        """If every document in the run fails to index, the job must still fail (not return [])."""
+        mock_documents = [Mock(spec=Document, id="doc1", content="content1")]
+        filtered_config = Mock(spec=SourcesConfig)
+        filtered_config.git = ["git_source"]
+        filtered_config.confluence = None
+        filtered_config.jira = None
+        filtered_config.publicdocs = None
+        filtered_config.localfile = None
+
+        self.source_filter.filter_sources.return_value = filtered_config
+
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+        ):
+            assert filtered_config_arg is filtered_config
+            yield mock_documents
+
+        self.orchestrator._stream_batches_from_sources = fake_stream_batches
+
+        mock_change_detector = AsyncMock()
+        mock_change_detector.classify_batch.return_value = mock_documents
+        state_detector_context = Mock()
+        state_detector_context.__aenter__ = AsyncMock(return_value=mock_change_detector)
+        state_detector_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch(
+            "qdrant_loader.core.pipeline.orchestrator.StateChangeDetector",
+            return_value=state_detector_context,
+        ):
+            mock_result = Mock()
+            mock_result.successfully_processed_documents = set()
+            mock_result.success_count = 0
+            mock_result.failure_count = 1
+            mock_result.errors = ["Upsert failed for chunk doc1: connection refused"]
+            mock_result.failed_document_ids = {"doc1"}
+            self.document_pipeline.process_batch.return_value = mock_result
+
+            with pytest.raises(PermanentJobError, match="failed to index into Qdrant"):
+                await self.orchestrator.process_documents(
+                    sources_config=self.mock_sources_config
+                )
+
+        assert self.orchestrator.last_pipeline_result.error_count == 1
+        assert self.orchestrator.last_pipeline_result.success_count == 0
+
+    @pytest.mark.asyncio
+    async def test_process_documents_raises_when_qdrant_collection_unavailable_even_if_no_changes(
+        self,
+    ):
+        """A no-change run must still fail when Qdrant collection is unavailable."""
+        mock_documents = cast(
+            list[Document],
+            [
+                Mock(spec=Document, id="doc1", content="content1"),
+                Mock(spec=Document, id="doc2", content="content2"),
+            ],
+        )
+
+        filtered_config = Mock(spec=SourcesConfig)
+        filtered_config.git = ["git_source"]
+        filtered_config.confluence = None
+        filtered_config.jira = None
+        filtered_config.publicdocs = None
+        filtered_config.localfile = None
+
+        self.source_filter.filter_sources.return_value = filtered_config
+        self.qdrant_manager.assert_collection_accessible.side_effect = Exception(
+            "Unexpected Response: 404 (Not Found): Collection does not exist"
+        )
+
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+        ):
+            assert filtered_config_arg is filtered_config
+            yield mock_documents
+
+        self.orchestrator._stream_batches_from_sources = fake_stream_batches
+
+        with pytest.raises(PermanentJobError, match="Qdrant collection is unavailable"):
+            await self.orchestrator.process_documents(
+                sources_config=self.mock_sources_config
+            )
+
+        self.document_pipeline.process_batch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_process_documents_no_sources_found(self):

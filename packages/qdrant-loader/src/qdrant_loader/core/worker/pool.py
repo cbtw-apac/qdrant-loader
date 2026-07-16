@@ -6,7 +6,7 @@ import time
 from json import JSONDecodeError
 from typing import Any
 
-from qdrant_loader.core.worker.handlers import JobHandler
+from qdrant_loader.core.worker.handlers import JobHandler, PermanentJobError
 from qdrant_loader.core.worker.queue import JobQueue
 from qdrant_loader.utils.logging import LoggingConfig
 
@@ -237,7 +237,11 @@ class QueueWorkerPool:
                         )
                     elif handler_exc is not None:
                         duration_ms = round((time.monotonic() - t0) * 1000)
-                        is_retry = job.attempts < self._max_attempts
+                        # PermanentJobError always fails immediately, never retries
+                        is_retry = (
+                            not isinstance(handler_exc, PermanentJobError)
+                            and job.attempts < self._max_attempts
+                        )
                         retry_after_seconds = 0
                         if is_retry and self._retry_backoff_base_seconds > 0:
                             retry_after_seconds = self._retry_backoff_base_seconds * (
