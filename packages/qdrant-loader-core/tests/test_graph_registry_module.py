@@ -1,20 +1,26 @@
+import importlib
 import sys
 
 from qdrant_loader_core.graph.extractor.base_extractor import EntityExtractor
 
 
 def test_registry_module_registers_all_builtin_extractors():
-    EntityExtractor._registry.clear()
-    sys.modules.pop("qdrant_loader_core.graph.registry", None)
-
-    import qdrant_loader_core.graph.registry  # noqa: F401
-
-    assert set(EntityExtractor._registry.keys()) == {
-        "jira",
-        "confluence",
-        "git",
-        "localfile",
-        "publicdocs",
-    }
-
-    EntityExtractor._registry.clear()
+    module_name = "qdrant_loader_core.graph.registry"
+    previous_registry = EntityExtractor._registry.copy()
+    previous_module = sys.modules.pop(module_name, None)
+    try:
+        importlib.import_module(module_name)
+        assert set(EntityExtractor._registry) == {
+            "jira",
+            "confluence",
+            "git",
+            "localfile",
+            "publicdocs",
+        }
+    finally:
+        EntityExtractor._registry.clear()
+        EntityExtractor._registry.update(previous_registry)
+        if previous_module is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous_module

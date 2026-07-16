@@ -41,6 +41,11 @@ class GraphConfig(BaseModel):
         return {
             "host": self.connection.host,
             "port": self.connection.port,
+            "password": (
+                self.connection.password.get_secret_value()
+                if self.connection.password is not None
+                else None
+            ),
             "graph_name": self.graph_name,
             "max_connections": self.pool.max_connections,
         }

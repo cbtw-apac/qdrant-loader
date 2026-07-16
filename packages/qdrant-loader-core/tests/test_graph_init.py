@@ -30,7 +30,11 @@ async def test_get_graph_store_creates_with_defaults():
         result = await graph_module.get_graph_store()
 
     mock_store_cls.assert_called_once_with(
-        host="localhost", port=6379, graph_name="default_graph", max_connections=10
+        host="localhost",
+        port=6379,
+        password=None,
+        graph_name="default_graph",
+        max_connections=10,
     )
     mock_init.assert_awaited_once_with(mock_store)
     assert result is mock_store
@@ -46,11 +50,19 @@ async def test_get_graph_store_creates_with_custom_params():
         patch.object(graph_module, "init_schema", AsyncMock()),
     ):
         result = await graph_module.get_graph_store(
-            host="myhost", port=1234, graph_name="mygraph", max_connections=5
+            host="myhost",
+            port=1234,
+            password="secret",
+            graph_name="mygraph",
+            max_connections=5,
         )
 
     mock_store_cls.assert_called_once_with(
-        host="myhost", port=1234, graph_name="mygraph", max_connections=5
+        host="myhost",
+        port=1234,
+        password="secret",
+        graph_name="mygraph",
+        max_connections=5,
     )
     assert result is mock_store
 

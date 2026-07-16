@@ -31,7 +31,6 @@ class FalkorGraphStore(GraphStore):
         graph_name="default_graph",
         max_connections: int = 10,
     ):
-
         if max_connections < 1:
             raise ValueError("max_connections must be >= 1")
         self._semaphore = asyncio.Semaphore(max_connections)
@@ -48,8 +47,7 @@ class FalkorGraphStore(GraphStore):
 
     def _node_payload(self, node: GraphNode) -> dict[str, Any]:
         props = self._clean_props(node.properties or {})
-        # Pop (not get): project is the MERGE identity key; leaving it in props
-        # would let `SET n += props` overwrite it right after MERGE.
+        # Pop (not get): leaving project in props would let `SET n += props` overwrite the MERGE key.
         props_project = props.pop("project", None)
         return {
             "id": node.id,
@@ -128,13 +126,16 @@ class FalkorGraphStore(GraphStore):
 
     def _edge_payload(self, edge: GraphEdge) -> dict[str, Any]:
         props = self._clean_props(edge.properties or {})
-        # Pop (not get): project is the MERGE identity key; leaving it in props
-        # would let `SET r += props` overwrite it right after MERGE.
+        # Pop (not get): leaving project in props would let `SET r += props` overwrite the MERGE key.
         props_project = props.pop("project", None)
         return {
             "source": edge.source,
             "target": edge.target,
-            "project": edge.project or props_project,
+            "project": (
+                edge.project
+                if edge.project is not None
+                else props_project or GLOBAL_PROJECT
+            ),
             "props": props,
         }
 
@@ -142,9 +143,7 @@ class FalkorGraphStore(GraphStore):
         self._validate_edge(edge)
         payload = self._edge_payload(edge)
 
-        # MERGE (not MATCH) the endpoints: the target may not be ingested yet, and
-        # MATCH would silently drop the edge; MERGE creates an unlabeled stub node
-        # instead, which upsert_node later enriches with its real label.
+        # MERGE (not MATCH): MATCH would silently drop an edge whose target isn't ingested yet.
         rel_pattern = (
             f"r:{edge.edge_type} {{kind: $props.kind}}"
             if "kind" in payload["props"]

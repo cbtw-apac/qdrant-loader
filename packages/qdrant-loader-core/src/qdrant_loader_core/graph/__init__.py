@@ -31,6 +31,7 @@ _graph_store_lock = asyncio.Lock()
 async def get_graph_store(
     host: str | None = None,
     port: int | None = None,
+    password: str | None = None,
     graph_name: str | None = None,
     max_connections: int | None = None,
 ) -> FalkorGraphStore:
@@ -54,6 +55,7 @@ async def get_graph_store(
                 _graph_store = FalkorGraphStore(
                     host=final_host,
                     port=int(final_port),
+                    password=password,
                     graph_name=final_graph,
                     max_connections=final_max_conn,
                 )

@@ -221,12 +221,12 @@ def test_edge_payload_falls_back_to_props_project(store):
     assert payload["project"] == "from_props"
 
 
-def test_edge_payload_no_project_at_all(store):
+def test_edge_payload_defaults_to_global_project(store):
     edge = GraphEdge(source="a", target="b", edge_type="LINKS_TO")
 
     payload = store._edge_payload(edge)
 
-    assert payload["project"] is None
+    assert payload["project"] == GLOBAL_PROJECT
 
 
 # ------------------------------------------------------------------
@@ -250,16 +250,16 @@ async def test_upsert_edge_with_project_and_kind(store):
 
 
 @pytest.mark.asyncio
-async def test_upsert_edge_without_project_or_kind(store):
+async def test_upsert_edge_without_explicit_project_defaults_to_global(store):
     store._run_query = AsyncMock()
     edge = GraphEdge(source="a", target="b", edge_type="LINKS_TO")
 
     await store.upsert_edge(edge)
 
     query, payload = store._run_query.await_args.args
-    assert "$project" not in query
+    assert "project: $project" in query
     assert "kind: $props.kind" not in query
-    assert payload["project"] is None
+    assert payload["project"] == GLOBAL_PROJECT
 
 
 @pytest.mark.asyncio
