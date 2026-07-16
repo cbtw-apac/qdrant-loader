@@ -12,6 +12,7 @@ from qdrant_loader.core.project_manager import ProjectManager
 from qdrant_loader.core.qdrant_manager import QdrantManager
 from qdrant_loader.core.state.state_change_detector import StateChangeDetector
 from qdrant_loader.core.state.state_manager import StateManager
+from qdrant_loader.core.worker.handlers import PermanentJobError
 from qdrant_loader.utils.logging import LoggingConfig
 from qdrant_loader.utils.sensitive import sanitize_exception_message
 
@@ -322,6 +323,16 @@ class PipelineOrchestrator:
             ):
                 raise ValueError(f"No sources found for type '{source_type}'")
 
+            # Fail fast when destination collection is unavailable. Without this
+            # preflight, a job with no changed documents would incorrectly return
+            # success even while Qdrant is misconfigured/unreachable.
+            try:
+                self.components.qdrant_manager.assert_collection_accessible()
+            except Exception as e:
+                raise PermanentJobError(
+                    f"Qdrant collection is unavailable: {sanitize_exception_message(e)}"
+                ) from e
+
             # Stream documents in bounded micro-batches and process each batch
             total_documents = 0
             processed_count = 0
@@ -531,11 +542,24 @@ class PipelineOrchestrator:
                             "No documents were successfully processed",
                             error_count=aggregated_result.error_count,
                         )
+                        raise PermanentJobError(
+                            self._format_indexing_failure_message(aggregated_result)
+                        )
                     else:
                         logger.info("No new or updated documents to process")
                     return 0
 
                 self.last_pipeline_result = aggregated_result
+                if aggregated_result.error_count > 0:
+                    logger.error(
+                        f"Ingestion completed with failures: "
+                        f"{aggregated_result.success_count} succeeded, "
+                        f"{aggregated_result.error_count} failed",
+                        error_count=aggregated_result.error_count,
+                    )
+                    raise PermanentJobError(
+                        self._format_indexing_failure_message(aggregated_result)
+                    )
                 logger.info(
                     f"✅ Ingestion completed: {aggregated_result.success_count} chunks processed successfully"
                 )
@@ -551,6 +575,15 @@ class PipelineOrchestrator:
                 sanitized_traceback=sanitize_exception_message(traceback.format_exc()),
             )
             raise
+
+    @staticmethod
+    def _format_indexing_failure_message(result: PipelineResult) -> str:
+        """Build an error message summarizing chunk-level indexing failures."""
+        error_summary = "; ".join(result.errors[:5])
+        return (
+            f"{result.error_count} chunk(s) failed to index into Qdrant "
+            f"(out of {result.success_count + result.error_count}): {error_summary}"
+        )
 
     async def _process_all_projects(
         self,
@@ -600,6 +633,9 @@ class PipelineOrchestrator:
                 logger.debug(
                     f"Processed {project_documents} documents from project: {project_id}"
                 )
+            except PermanentJobError:
+                # PermanentJobError from process_documents should propagate
+                raise
             except ConnectorConfigurationError as e:
                 logger.error(
                     f"Configuration error in project {project_id}: "

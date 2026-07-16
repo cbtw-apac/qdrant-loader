@@ -205,6 +205,14 @@ class QdrantManager:
             )
         return cast(QdrantClient, self.client)
 
+    def assert_collection_accessible(self) -> None:
+        """Validate that the configured collection is reachable.
+
+        Raises when the collection does not exist or Qdrant is unavailable.
+        """
+        client = self._ensure_client_connected()
+        client.get_collection(collection_name=self.collection_name)
+
     # Indexes that filter-based deletes (delete_points_by_document_id, etc.)
     # depend on. A silent failure here would surface later as a confusing
     # Qdrant error mid-delete, so these must raise instead of just warning.

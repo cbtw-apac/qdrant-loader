@@ -602,7 +602,7 @@ class TestEmbeddingWorker:
             consumer.cancel()
             try:
                 await asyncio.wait_for(consumer, timeout=5)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
+            except (TimeoutError, asyncio.CancelledError):
                 pass
 
     @pytest.mark.asyncio
