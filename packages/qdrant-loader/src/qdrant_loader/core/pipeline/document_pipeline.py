@@ -170,7 +170,9 @@ class DocumentPipeline:
             return
 
         try:
-            graph_store = await get_graph_store()
+            graph_store = await get_graph_store(
+                **(graph_cfg.store_kwargs() if graph_cfg else {})
+            )
 
             if nodes_batch:
                 await graph_store.upsert_nodes_batch(nodes_batch)

@@ -168,3 +168,126 @@ async def test_jira_parent_edge_kind_derived_from_issue_type():
 
     assert subtask_edge.properties["kind"] == "subtask"
     assert story_edge.properties["kind"] == "child"
+
+
+@pytest.mark.asyncio
+async def test_jira_reporter_and_assignee_as_plain_strings():
+    extractor = JiraEntityExtractor()
+
+    doc = Document(
+        title="Legacy issue",
+        content_type="issue",
+        content="content",
+        source_type="jira",
+        source="ABC-9",
+        url="http://jira/ABC-9",
+        metadata={
+            "key": "ABC-9",
+            "project_key": "ABC",
+            "reporter": "reporter@company.com",
+            "assignee": "assignee@company.com",
+        },
+    )
+
+    result = await extractor.extract(doc)
+    person_ids = {n.id for n in result.nodes if n.label == "Person"}
+
+    assert person_ids == {"reporter@company.com", "assignee@company.com"}
+
+
+@pytest.mark.asyncio
+async def test_jira_reporter_and_assignee_sharing_id_deduplicated():
+    extractor = JiraEntityExtractor()
+
+    doc = Document(
+        title="Self assigned issue",
+        content_type="issue",
+        content="content",
+        source_type="jira",
+        source="ABC-10",
+        url="http://jira/ABC-10",
+        metadata={
+            "key": "ABC-10",
+            "project_key": "ABC",
+            "reporter": "same@company.com",
+            "assignee": "same@company.com",
+        },
+    )
+
+    result = await extractor.extract(doc)
+    person_nodes = [n for n in result.nodes if n.label == "Person"]
+    authored_by_edges = [e for e in result.edges if e.edge_type == "AUTHORED_BY"]
+
+    assert len(person_nodes) == 1
+    assert len(authored_by_edges) == 1
+
+
+@pytest.mark.asyncio
+async def test_jira_issue_without_project_key_has_no_container():
+    extractor = JiraEntityExtractor()
+
+    doc = Document(
+        title="No project",
+        content_type="issue",
+        content="content",
+        source_type="jira",
+        source="ABC-11",
+        url="http://jira/ABC-11",
+        metadata={"key": "ABC-11"},
+    )
+
+    result = await extractor.extract(doc)
+
+    assert not any(n.label == "Container" for n in result.nodes)
+
+
+@pytest.mark.asyncio
+async def test_jira_description_with_git_url_creates_link():
+    extractor = JiraEntityExtractor()
+
+    doc = Document(
+        title="Issue with git link",
+        content_type="issue",
+        content="content",
+        source_type="jira",
+        source="ABC-12",
+        url="http://jira/ABC-12",
+        metadata={
+            "key": "ABC-12",
+            "project_key": "ABC",
+            "description": "See https://github.com/org/repo for details",
+        },
+    )
+
+    result = await extractor.extract(doc)
+    git_link_edges = [
+        e
+        for e in result.edges
+        if e.edge_type == "LINKS_TO" and e.properties.get("kind") == "git"
+    ]
+
+    assert len(git_link_edges) == 1
+    assert any(n.label == "URL" for n in result.nodes)
+
+
+@pytest.mark.asyncio
+async def test_jira_linked_issue_missing_key_is_skipped():
+    extractor = JiraEntityExtractor()
+
+    doc = Document(
+        title="Malformed link",
+        content_type="issue",
+        content="content",
+        source_type="jira",
+        source="ABC-13",
+        url="http://jira/ABC-13",
+        metadata={
+            "key": "ABC-13",
+            "project_key": "ABC",
+            "linked_issue_details": [{"relation": "clones"}],
+        },
+    )
+
+    result = await extractor.extract(doc)
+
+    assert not any(e.edge_type == "LINKS_TO" for e in result.edges)

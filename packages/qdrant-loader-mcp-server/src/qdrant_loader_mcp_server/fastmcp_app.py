@@ -32,15 +32,20 @@ async def _lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
     Whatever this yields becomes ``ctx.lifespan_context`` inside every tool.
     """
     # Lazy imports keep module import cheap
-    from .config_loader import load_config
+    from .config_loader import load_config, resolve_config_path
     from .mcp.intelligence_handler import IntelligenceHandler
     from .mcp.protocol import MCPProtocol
     from .mcp.search_handler import SearchHandler
     from .search.engine import SearchEngine
     from .search.processor import QueryProcessor
 
-    config_path = os.getenv("MCP_CONFIG")
-    config, _, _ = load_config(Path(config_path) if config_path else None)
+    config_path_env = os.getenv("MCP_CONFIG")
+    cli_config_path = Path(config_path_env) if config_path_env else None
+    # Resolve once so the graph store (initialized lazily, per-request) uses the
+    # exact same config file as the search engine below instead of re-deriving
+    # its own path from Path.cwd(), which can silently diverge from this one.
+    resolved_config_path = resolve_config_path(cli_config_path)
+    config, _, _ = load_config(resolved_config_path or cli_config_path)
 
     search_engine = SearchEngine()
     query_processor = QueryProcessor(config.openai)
@@ -63,7 +68,9 @@ async def _lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
         # Stateful: holds the cluster store shared with expand_cluster
         # build one instance for reuse
         intelligence_handler = IntelligenceHandler(
-            search_engine=search_engine, protocol=MCPProtocol()
+            search_engine=search_engine,
+            protocol=MCPProtocol(),
+            config_path=resolved_config_path,
         )
 
         yield {
