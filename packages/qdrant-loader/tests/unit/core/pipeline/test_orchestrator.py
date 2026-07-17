@@ -428,6 +428,7 @@ class TestPipelineOrchestrator:
             project_id=None,
             seen_uris=None,
             resume=True,
+            force=False,
         ):
             assert filtered_config_arg is filtered_config
             yield mock_documents
@@ -480,6 +481,7 @@ class TestPipelineOrchestrator:
             project_id=None,
             seen_uris=None,
             resume=True,
+            force=False,
         ):
             assert filtered_config_arg is filtered_config
             yield mock_documents
