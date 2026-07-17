@@ -684,7 +684,14 @@ class TestJiraConnector:
         connector = JiraCloudConnector(jira_cloud_config)
         jql = connector._build_jql_filter()
 
-        assert jql == 'project = "TEST"'
+        assert jql == 'project = "TEST" ORDER BY key ASC'
+
+    def test_jql_filter_build_has_stable_order_by(self, jira_cloud_config):
+        """ORDER BY key ASC keeps pagination/checkpoint offsets stable across requests."""
+        connector = JiraCloudConnector(jira_cloud_config)
+        jql = connector._build_jql_filter()
+
+        assert jql.endswith("ORDER BY key ASC")
 
     def test_escape_jql_literal_handles_quotes_and_backslashes(self):
         """Test JQL literal escaping for unsafe characters."""

@@ -54,10 +54,8 @@ class TestTextProcessor:
             return_value=["chunk1", "chunk2"]
         )
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_init_successful_spacy_load(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -82,11 +80,9 @@ class TestTextProcessor:
         mock_text_splitter_class.assert_called_once()
         assert processor.text_splitter == self.mock_text_splitter
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch("qdrant_loader.core.text_processing.text_processor.download")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("spacy.cli.download.download")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_init_spacy_model_download(
         self,
@@ -113,10 +109,8 @@ class TestTextProcessor:
         assert mock_spacy_load.call_count == 2
         assert processor.nlp == self.mock_nlp
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_init_nltk_data_download(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -139,10 +133,8 @@ class TestTextProcessor:
         mock_nltk.download.assert_any_call("punkt")
         mock_nltk.download.assert_any_call("stopwords")
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_process_text_success(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -188,10 +180,8 @@ class TestTextProcessor:
         assert result["pos_tags"] == [("Hello", "INTJ"), ("world", "NOUN")]
         assert result["chunks"] == ["chunk1", "chunk2"]
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_process_text_long_text_truncation(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -216,10 +206,8 @@ class TestTextProcessor:
         # Verify text was truncated
         self.mock_nlp.assert_called_with("a" * MAX_TEXT_LENGTH_FOR_SPACY)
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_process_text_exception_handling(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -245,10 +233,8 @@ class TestTextProcessor:
         assert result["pos_tags"] == []
         assert result["chunks"] == ["test text"]
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_get_entities_success(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -278,10 +264,8 @@ class TestTextProcessor:
         # Verify results
         assert result == [("John", "PERSON"), ("New York", "GPE")]
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_get_entities_limit(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -311,10 +295,8 @@ class TestTextProcessor:
         # Verify limit is respected
         assert len(result) == MAX_ENTITIES_TO_EXTRACT
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_get_entities_exception_handling(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -337,10 +319,8 @@ class TestTextProcessor:
         # Verify empty result
         assert result == []
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_get_pos_tags_success(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -372,10 +352,8 @@ class TestTextProcessor:
         # Verify results
         assert result == [("Hello", "INTJ"), ("world", "NOUN")]
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_get_pos_tags_limit(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -405,10 +383,8 @@ class TestTextProcessor:
         # Verify limit is respected
         assert len(result) == MAX_POS_TAGS_TO_EXTRACT
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_get_pos_tags_exception_handling(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -431,10 +407,8 @@ class TestTextProcessor:
         # Verify empty result
         assert result == []
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_split_into_chunks_default(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -457,10 +431,8 @@ class TestTextProcessor:
         )
         assert result == ["chunk1", "chunk2"]
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_split_into_chunks_custom_size(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -504,10 +476,8 @@ class TestTextProcessor:
         )
         assert result == ["custom_chunk1", "custom_chunk2"]
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_split_into_chunks_exception_handling(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -530,10 +500,8 @@ class TestTextProcessor:
         # Verify fallback result
         assert result == ["test text"]
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_split_into_chunks_empty_text(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -556,10 +524,8 @@ class TestTextProcessor:
         # Verify empty result
         assert result == []
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_pipeline_optimization_no_parser(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings
@@ -579,10 +545,8 @@ class TestTextProcessor:
         # Verify select_pipes was not called (no parser to remove)
         self.mock_nlp.select_pipes.assert_not_called()
 
-    @patch("qdrant_loader.core.text_processing.text_processor.spacy.load")
-    @patch(
-        "qdrant_loader.core.text_processing.text_processor.RecursiveCharacterTextSplitter"
-    )
+    @patch("spacy.load")
+    @patch("langchain_text_splitters.RecursiveCharacterTextSplitter")
     @patch("qdrant_loader.core.text_processing.text_processor.nltk")
     def test_custom_chunk_size_overlap_calculation(
         self, mock_nltk, mock_text_splitter_class, mock_spacy_load, mock_settings

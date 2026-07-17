@@ -17,7 +17,7 @@ def _setup_qdrant_loader_core_stubs(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.syspath_prepend(str(core_src))
 
     pkg = types.ModuleType("qdrant_loader_core")
-    pkg.__path__ = []
+    pkg.__path__ = [str(core_src / "qdrant_loader_core")]
     monkeypatch.setitem(sys.modules, "qdrant_loader_core", pkg)
 
     config_mod = types.ModuleType("qdrant_loader_core.config")
@@ -103,6 +103,7 @@ async def test_incremental_pull_accepts_since_param(monkeypatch):
         project_id=None,
         seen_uris=None,
         resume=True,
+        force=False,
     ):
         recorded_calls.append(
             {
@@ -112,6 +113,7 @@ async def test_incremental_pull_accepts_since_param(monkeypatch):
                 "project_id": project_id,
                 "seen_uris": seen_uris,
                 "resume": resume,
+                "force": force,
             }
         )
         if False:

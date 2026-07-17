@@ -223,12 +223,8 @@ class TestSemanticAnalyzer:
     def test_initialization_model_download(self):
         """Test SemanticAnalyzer initialization with model download."""
         with (
-            patch(
-                "qdrant_loader.core.text_processing.semantic_analyzer.spacy.load"
-            ) as mock_load,
-            patch(
-                "qdrant_loader.core.text_processing.semantic_analyzer.spacy_download"
-            ) as mock_download,
+            patch("spacy.load") as mock_load,
+            patch("spacy.cli.download.download") as mock_download,
         ):
             # First call raises OSError, second call succeeds
             mock_nlp = Mock()

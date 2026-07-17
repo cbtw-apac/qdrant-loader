@@ -300,6 +300,13 @@ class BaseJiraConnector(BaseConnector):
         if updated_after:
             jql += f" AND updated >= '{updated_after.strftime('%Y-%m-%d %H:%M')}'"
 
+        # Pagination (and offset-based checkpoint resume, see
+        # JiraDataCenterConnector.get_issues) relies on a stable row order
+        # across requests; without an explicit ORDER BY, Jira may reorder
+        # results between pages (e.g. new issues created mid-scan), causing
+        # resume to skip or duplicate issues.
+        jql += " ORDER BY key ASC"
+
         return jql
 
     async def __aenter__(self):

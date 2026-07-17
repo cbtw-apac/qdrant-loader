@@ -186,6 +186,58 @@ async def test_checkpoint_not_on_attachment_documents(jira_config):
 
 
 # ---------------------------------------------------------------------------
+# 1b. __ingestion_checkpoint must not affect change detection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingestion_checkpoint_does_not_affect_content_hash(jira_config):
+    """A document's content_hash must be identical across two fetches that
+    only differ in their propagated pagination cursor.
+
+    Regression test: Jira's ``nextPageToken`` is an opaque, per-request
+    cursor with no guarantee of being byte-identical across two fetches of
+    the same page. Before this fix, __ingestion_checkpoint (which carries
+    that cursor) was folded into content_hash via Document.__init__, so an
+    unchanged issue would get a different hash — and therefore look
+    "updated" to StateChangeDetector.classify_batch — on every single
+    ingestion run, defeating resume/change-detection entirely.
+    """
+    connector = JiraCloudConnector(jira_config)
+
+    issue_run1 = _make_issue()
+    issue_run1.ingestion_checkpoint = {
+        "cursor_kind": "page_token",
+        "cursor_value": "tok-run-1",
+        "batch_index": 0,
+    }
+    issue_run2 = _make_issue()
+    issue_run2.ingestion_checkpoint = {
+        "cursor_kind": "page_token",
+        "cursor_value": "tok-run-2-completely-different",
+        "batch_index": 0,
+    }
+
+    docs: list[Document] = []
+    for issue in (issue_run1, issue_run2):
+        async for doc in connector._stream_issues_to_documents(
+            [issue], include_attachments=False
+        ):
+            docs.append(doc)
+
+    assert len(docs) == 2
+    assert docs[0].metadata["__ingestion_checkpoint"]["cursor_value"] == "tok-run-1"
+    assert (
+        docs[1].metadata["__ingestion_checkpoint"]["cursor_value"]
+        == "tok-run-2-completely-different"
+    )
+    assert docs[0].content_hash == docs[1].content_hash, (
+        "content_hash must be stable across runs regardless of the "
+        "propagated pagination cursor value"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 2. Resume: saved cursor is passed to the connector factory
 # ---------------------------------------------------------------------------
 

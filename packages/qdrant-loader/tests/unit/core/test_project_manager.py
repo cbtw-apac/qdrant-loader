@@ -289,3 +289,109 @@ async def test_outdated_state_db_error_surfaces_actionable_hint(project_manager)
         )
 
     mock_session.rollback.assert_awaited_once()
+
+
+def _session_with_existing_sources(existing_sources):
+    """Build a mocked AsyncSession whose select().scalars().all() returns
+    the given ProjectSource-like rows."""
+    session = AsyncMock(spec=AsyncSession)
+    execute_result = MagicMock()
+    execute_result.scalars.return_value.all.return_value = existing_sources
+    session.execute.return_value = execute_result
+    return session
+
+
+@pytest.mark.asyncio
+async def test_update_project_sources_clears_checkpoint_on_config_change(
+    project_manager, sample_projects_config
+):
+    """When a source's configuration hash changes, any saved checkpoint for that
+    source must be dropped — it was computed against the old query/config and
+    would otherwise silently resume the new run mid-page against stale state."""
+    from unittest.mock import patch
+
+    from qdrant_loader.core.state.models import ProjectSource
+
+    project_id = "test-project"
+    config = sample_projects_config.projects[project_id]
+
+    existing_source = MagicMock(spec=ProjectSource)
+    existing_source.source_type = "git"
+    existing_source.source_name = "test-repo"
+    existing_source.config_hash = "stale-hash-that-will-not-match"
+
+    session = _session_with_existing_sources([existing_source])
+
+    with patch(
+        "qdrant_loader.core.state.checkpoint_manager.CheckpointManager"
+    ) as checkpoint_manager_cls:
+        clear_checkpoint = AsyncMock()
+        checkpoint_manager_cls.return_value.clear_checkpoint = clear_checkpoint
+
+        await project_manager._update_project_sources(session, project_id, config)
+
+    clear_checkpoint.assert_awaited_once_with(project_id, "git", "test-repo")
+
+
+@pytest.mark.asyncio
+async def test_update_project_sources_keeps_checkpoint_when_config_unchanged(
+    project_manager, sample_projects_config
+):
+    """No config change → no checkpoint should be touched."""
+    from unittest.mock import patch
+
+    from qdrant_loader.core.state.models import ProjectSource
+
+    project_id = "test-project"
+    config = sample_projects_config.projects[project_id]
+    git_source_config = config.sources.git["test-repo"]
+    real_hash = project_manager._calculate_source_config_hash(git_source_config)
+
+    existing_source = MagicMock(spec=ProjectSource)
+    existing_source.source_type = "git"
+    existing_source.source_name = "test-repo"
+    existing_source.config_hash = real_hash
+
+    session = _session_with_existing_sources([existing_source])
+
+    with patch(
+        "qdrant_loader.core.state.checkpoint_manager.CheckpointManager"
+    ) as checkpoint_manager_cls:
+        clear_checkpoint = AsyncMock()
+        checkpoint_manager_cls.return_value.clear_checkpoint = clear_checkpoint
+
+        await project_manager._update_project_sources(session, project_id, config)
+
+    clear_checkpoint.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_project_sources_keeps_checkpoint_for_legacy_row_without_hash(
+    project_manager, sample_projects_config
+):
+    """A pre-existing source that never had a config_hash computed (legacy DB
+    row, upgrading into hash tracking for the first time) should not have its
+    checkpoint wiped just because the hash column is being populated now."""
+    from unittest.mock import patch
+
+    from qdrant_loader.core.state.models import ProjectSource
+
+    project_id = "test-project"
+    config = sample_projects_config.projects[project_id]
+
+    existing_source = MagicMock(spec=ProjectSource)
+    existing_source.source_type = "git"
+    existing_source.source_name = "test-repo"
+    existing_source.config_hash = None
+
+    session = _session_with_existing_sources([existing_source])
+
+    with patch(
+        "qdrant_loader.core.state.checkpoint_manager.CheckpointManager"
+    ) as checkpoint_manager_cls:
+        clear_checkpoint = AsyncMock()
+        checkpoint_manager_cls.return_value.clear_checkpoint = clear_checkpoint
+
+        await project_manager._update_project_sources(session, project_id, config)
+
+    clear_checkpoint.assert_not_awaited()

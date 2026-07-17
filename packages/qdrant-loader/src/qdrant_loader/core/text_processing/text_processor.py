@@ -1,12 +1,9 @@
 """Text processing module integrating LangChain, spaCy, and NLTK."""
 
 import nltk
-import spacy
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_loader.config import Settings
 from qdrant_loader.core.text_processing import spacy_model_cache
 from qdrant_loader.utils.logging import LoggingConfig
-from spacy.cli.download import download
 
 logger = LoggingConfig.get_logger(__name__)
 
@@ -43,6 +40,9 @@ class TextProcessor:
         spacy_model = settings.global_config.semantic_analysis.spacy_model
 
         def _load_nlp():
+            import spacy
+            from spacy.cli.download import download
+
             try:
                 nlp = spacy.load(spacy_model)
             except OSError:
@@ -62,6 +62,8 @@ class TextProcessor:
         )
 
         # Initialize LangChain text splitter with configuration from settings
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.global_config.chunking.chunk_size,
             chunk_overlap=settings.global_config.chunking.chunk_overlap,
@@ -187,6 +189,8 @@ class TextProcessor:
             if chunk_size:
                 # Create a new text splitter with the custom chunk size
                 # Ensure chunk_overlap is smaller than chunk_size
+                from langchain_text_splitters import RecursiveCharacterTextSplitter
+
                 chunk_overlap = min(chunk_size // 4, 50)  # 25% of chunk size, max 50
                 text_splitter = RecursiveCharacterTextSplitter(
                     chunk_size=chunk_size,

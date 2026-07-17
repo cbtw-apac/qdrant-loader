@@ -72,6 +72,7 @@ class PipelineOrchestrator:
         project_id: str | None = None,
         seen_uris: set[str] | None = None,
         resume: bool = True,
+        force: bool = False,
     ) -> AsyncIterator[list[Document]]:
         """Stream source documents in bounded micro-batches.
 
@@ -101,7 +102,7 @@ class PipelineOrchestrator:
                 # Determine if we should attempt to resume from a checkpoint
                 checkpoint_cursor = None
                 try:
-                    if resume and project_id is not None:
+                    if resume and not force and project_id is not None:
                         # Lazy import to avoid cycles
                         from qdrant_loader.core.state.checkpoint_manager import (
                             CheckpointManager,
@@ -360,6 +361,7 @@ class PipelineOrchestrator:
                     since,
                     project_id=current_project_id,
                     resume=resume,
+                    force=force,
                 )
 
                 async for batch in stream_iter:
@@ -386,9 +388,20 @@ class PipelineOrchestrator:
                     if not batch:
                         continue
 
+                    async def _persist_as_completed(
+                        doc: Document, success: bool
+                    ) -> None:
+                        if not success:
+                            return
+                        await self._persist_single_document_state(
+                            doc, current_project_id
+                        )
+
                     batch_result = (
                         await self.components.document_pipeline.process_batch(
-                            batch, current_project_id
+                            batch,
+                            current_project_id,
+                            on_document_complete=_persist_as_completed,
                         )
                     )
                     aggregated_result.success_count += batch_result.success_count
@@ -696,97 +709,6 @@ class PipelineOrchestrator:
             )
         return total_processed_count
 
-    async def _collect_documents_from_sources(
-        self,
-        filtered_config: SourcesConfig,
-        project_id: str | None = None,
-        resume: bool = True,
-    ) -> list[Document]:
-        """Collect documents from all configured sources."""
-        documents = []
-
-        # Process each source type with project context
-        async def _connector_factory_for_source_type(source_type_name: str):
-            async def _factory(src_config):
-                checkpoint_cursor = None
-                try:
-                    if resume and project_id is not None:
-                        from qdrant_loader.core.state.checkpoint_manager import (
-                            CheckpointManager,
-                        )
-
-                        async with (
-                            await self.components.state_manager.get_session() as session
-                        ):
-                            cp_mgr = CheckpointManager(session)
-                            cp = await cp_mgr.get_checkpoint(
-                                project_id, source_type_name, src_config.source
-                            )
-                            if cp:
-                                checkpoint_cursor = cp.cursor_value
-                except Exception:
-                    logger.debug(
-                        "Checkpoint lookup failed, proceeding without checkpoint",
-                        source_type=source_type_name,
-                        source=getattr(src_config, "source", None),
-                    )
-                return get_connector_instance(
-                    src_config, checkpoint_cursor=checkpoint_cursor
-                )
-
-            return _factory
-
-        if filtered_config.confluence:
-            confluence_docs = (
-                await self.components.source_processor.process_source_type(
-                    filtered_config.confluence,
-                    await _connector_factory_for_source_type("Confluence"),
-                    "Confluence",
-                )
-            )
-            documents.extend(confluence_docs)
-
-        if filtered_config.git:
-            git_docs = await self.components.source_processor.process_source_type(
-                filtered_config.git, get_connector_instance, "Git"
-            )
-            documents.extend(git_docs)
-
-        if filtered_config.jira:
-            jira_docs = await self.components.source_processor.process_source_type(
-                filtered_config.jira,
-                await _connector_factory_for_source_type("Jira"),
-                "Jira",
-            )
-            documents.extend(jira_docs)
-
-        if filtered_config.publicdocs:
-            publicdocs_docs = (
-                await self.components.source_processor.process_source_type(
-                    filtered_config.publicdocs, get_connector_instance, "PublicDocs"
-                )
-            )
-            documents.extend(publicdocs_docs)
-
-        if filtered_config.localfile:
-            localfile_docs = await self.components.source_processor.process_source_type(
-                filtered_config.localfile,
-                await _connector_factory_for_source_type("LocalFile"),
-                "LocalFile",
-            )
-            documents.extend(localfile_docs)
-
-        # Inject project metadata into documents if project context is available
-        if project_id and self.project_manager:
-            for document in documents:
-                enhanced_metadata = self.project_manager.inject_project_metadata(
-                    project_id, document.metadata
-                )
-                document.metadata = enhanced_metadata
-
-        logger.info(f"📄 Collected {len(documents)} documents from all sources")
-        return documents
-
     async def _detect_document_changes(
         self,
         documents: list[Document],
@@ -875,6 +797,36 @@ class PipelineOrchestrator:
                 error_type=type(e).__name__,
             )
             raise
+
+    async def _persist_single_document_state(
+        self,
+        document: Document,
+        project_id: str | None = None,
+    ) -> None:
+        """Persist one document's state as soon as it finishes, not at batch end.
+
+        Streaming batches are bounded at up to 256 documents and state was
+        previously only committed once the *entire* batch finished
+        chunking/embedding/upserting. If the process was interrupted partway
+        through such a batch, documents already durably upserted to Qdrant
+        had no ``DocumentStateRecord`` yet, so a resume would treat them as
+        new and reprocess them. Called from ``UpsertWorker`` the moment a
+        document's last chunk is accounted for, this closes that gap. The
+        end-of-batch ``_update_document_states`` call still runs afterwards
+        as a safety net (idempotent) for anything this callback missed.
+        """
+        try:
+            if not self.components.state_manager._initialized:
+                await self.components.state_manager.initialize()
+            await self.components.state_manager.update_document_states_batch(
+                [document], project_id
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to persist incremental document state for {document.id}: "
+                f"{sanitize_exception_message(e)}",
+                error_type=type(e).__name__,
+            )
 
     async def _update_document_states(
         self,
