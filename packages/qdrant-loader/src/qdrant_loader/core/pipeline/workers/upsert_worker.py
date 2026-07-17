@@ -2,7 +2,7 @@
 
 import asyncio
 from collections import Counter
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from qdrant_client.http import models
@@ -220,7 +220,7 @@ class UpsertWorker(BaseWorker):
         doc_totals: dict[str, int],
         doc_seen: dict[str, int],
         doc_failed: dict[str, bool],
-    ) -> None:
+    ) -> bool | None:
         """Record one chunk's fate and finalize its document once complete.
 
         A document is only added to ``successfully_processed_documents`` once
@@ -230,10 +230,15 @@ class UpsertWorker(BaseWorker):
         happened to succeed. If any chunk failed (embedding failure, upsert
         failure, or duplicate-id collision), the document lands in
         ``failed_document_ids`` instead so a later incremental run retries it.
+
+        Returns ``None`` while the document still has outstanding chunks, or
+        the document's final success flag (``True``/``False``) the moment it
+        completes — callers use this to persist document state immediately
+        instead of waiting for the whole streaming batch to finish.
         """
         parent_doc = chunk.metadata.get("parent_document")
         if not parent_doc:
-            return
+            return None
 
         doc_id = parent_doc.id
         total = chunk.metadata.get("parent_document_total_chunks") or 1
@@ -248,8 +253,11 @@ class UpsertWorker(BaseWorker):
             if doc_failed.get(doc_id):
                 result.failed_document_ids.add(doc_id)
                 result.successfully_processed_documents.discard(doc_id)
+                return False
             else:
                 result.successfully_processed_documents.add(doc_id)
+                return True
+        return None
 
     def _merge_batch_outcome(
         self,
@@ -261,8 +269,14 @@ class UpsertWorker(BaseWorker):
         doc_totals: dict[str, int],
         doc_seen: dict[str, int],
         doc_failed: dict[str, bool],
-    ) -> None:
-        """Fold one batch's process() outcome into the running PipelineResult."""
+    ) -> list[tuple[Any, bool]]:
+        """Fold one batch's process() outcome into the running PipelineResult.
+
+        Returns the documents that just completed as a result of this batch
+        (parent document object, success flag), so the caller can persist
+        their state right away instead of waiting for the whole streaming
+        batch to finish.
+        """
         success_count, error_count, successful_doc_ids, errors = outcome
 
         if success_count > 0:
@@ -286,16 +300,24 @@ class UpsertWorker(BaseWorker):
         result.error_count += error_count
         result.errors.extend(errors)
 
+        finalized: list[tuple[Any, bool]] = []
         for chunk, _ in batch:
             chunk_failed = (
                 success_count == 0 or str(chunk.id) in dedup["duplicate_chunk_ids"]
             )
-            self._note_chunk_outcome(
+            outcome_flag = self._note_chunk_outcome(
                 chunk, chunk_failed, result, doc_totals, doc_seen, doc_failed
             )
+            if outcome_flag is not None:
+                parent_doc = chunk.metadata.get("parent_document")
+                if parent_doc:
+                    finalized.append((parent_doc, outcome_flag))
+        return finalized
 
     async def process_embedded_chunks(
-        self, embedded_chunks: AsyncIterator[tuple[Any, list[float] | None]]
+        self,
+        embedded_chunks: AsyncIterator[tuple[Any, list[float] | None]],
+        on_document_complete: Callable[[Any, bool], Awaitable[None]] | None = None,
     ) -> PipelineResult:
         """Upsert embedded chunks to Qdrant.
 
@@ -310,10 +332,31 @@ class UpsertWorker(BaseWorker):
 
         Args:
             embedded_chunks: AsyncIterator of (chunk, embedding) tuples
+            on_document_complete: Optional async callback invoked with
+                ``(parent_document, success)`` the moment a document's last
+                chunk is accounted for — before the whole iterator finishes.
+                Lets callers persist document state incrementally, so a
+                mid-run interruption doesn't lose the state of documents
+                that were already fully upserted. Callback failures are
+                logged and never abort the pipeline.
 
         Returns:
             PipelineResult with processing statistics
         """
+
+        async def _notify(parent_doc: Any, success: bool) -> None:
+            if on_document_complete is None:
+                return
+            try:
+                await on_document_complete(parent_doc, success)
+            except Exception as e:
+                logger.error(
+                    "on_document_complete callback failed",
+                    document_id=getattr(parent_doc, "id", None),
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+
         logger.debug("UpsertWorker started")
         logger.info("🔄 Starting upsert processing", max_workers=self.max_workers)
         result = PipelineResult()
@@ -329,7 +372,7 @@ class UpsertWorker(BaseWorker):
         async def drain_oldest() -> None:
             task, task_batch, dedup = pending.pop(0)
             outcome = await task
-            self._merge_batch_outcome(
+            finalized = self._merge_batch_outcome(
                 task_batch,
                 dedup,
                 outcome,
@@ -339,6 +382,8 @@ class UpsertWorker(BaseWorker):
                 doc_seen,
                 doc_failed,
             )
+            for parent_doc, success in finalized:
+                await _notify(parent_doc, success)
 
         def dispatch(batch_to_dispatch: list[tuple[Any, list[float]]]) -> None:
             dedup = self._reserve_chunk_ids(batch_to_dispatch, seen_chunk_ids)
@@ -356,9 +401,13 @@ class UpsertWorker(BaseWorker):
                     result.errors.append(
                         f"Embedding failed for chunk {chunk.id}, skipped upsert"
                     )
-                    self._note_chunk_outcome(
+                    outcome_flag = self._note_chunk_outcome(
                         chunk, True, result, doc_totals, doc_seen, doc_failed
                     )
+                    if outcome_flag is not None:
+                        parent_doc = chunk.metadata.get("parent_document")
+                        if parent_doc:
+                            await _notify(parent_doc, outcome_flag)
                     continue
 
                 batch.append((chunk, embedding))

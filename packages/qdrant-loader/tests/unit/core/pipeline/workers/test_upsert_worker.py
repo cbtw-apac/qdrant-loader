@@ -1161,3 +1161,107 @@ class TestUpsertWorker:
         assert self.mock_qdrant_manager.upsert_points.call_count == 2
         assert "doc3" not in result.successfully_processed_documents
         assert "doc3" not in result.failed_document_ids
+
+    @pytest.mark.asyncio
+    async def test_process_embedded_chunks_notifies_on_document_complete_incrementally(
+        self,
+    ):
+        """on_document_complete must fire per-document as each one finishes,
+        not only once the whole iterator has been consumed.
+
+        This is what lets a caller persist document state (e.g. for resume)
+        as documents complete, so a mid-run interruption doesn't lose state
+        for documents that were already durably upserted.
+        """
+        worker = UpsertWorker(
+            qdrant_manager=self.mock_qdrant_manager,
+            batch_size=1,
+            max_workers=1,
+            queue_size=1000,
+            shutdown_event=self.mock_shutdown_event,
+        )
+        self.mock_qdrant_manager.upsert_points = AsyncMock()
+
+        doc1, doc2 = Mock(id="doc1"), Mock(id="doc2")
+        chunk1 = _make_chunk("chunk1", doc1, total_chunks=1)
+        chunk2 = _make_chunk("chunk2", doc2, total_chunks=1)
+
+        notified: list[tuple[str, bool]] = []
+        notified_before_iterator_done: list[bool] = []
+        iterator_done = False
+
+        async def on_document_complete(doc, success):
+            notified.append((doc.id, success))
+            notified_before_iterator_done.append(not iterator_done)
+
+        async def embedded_chunks_iterator():
+            nonlocal iterator_done
+            yield (chunk1, [0.1, 0.2, 0.3])
+            yield (chunk2, [0.4, 0.5, 0.6])
+            iterator_done = True
+
+        with patch(
+            "qdrant_loader.core.pipeline.workers.upsert_worker.prometheus_metrics"
+        ):
+            result = await worker.process_embedded_chunks(
+                embedded_chunks_iterator(), on_document_complete=on_document_complete
+            )
+
+        assert result.successfully_processed_documents == {"doc1", "doc2"}
+        assert notified == [("doc1", True), ("doc2", True)]
+        # doc1's callback must have fired while the iterator was still being
+        # consumed (batch_size=1 dispatches+drains doc1 before doc2 arrives).
+        assert notified_before_iterator_done == [True, False]
+
+    @pytest.mark.asyncio
+    async def test_process_embedded_chunks_notifies_failure_on_embedding_failure(self):
+        """A document whose embedding failed must notify with success=False."""
+        mock_chunk = Mock()
+        mock_chunk.id = "chunk1"
+        mock_chunk.metadata = {"parent_document": Mock(id="doc1")}
+
+        notified: list[tuple[str, bool]] = []
+
+        async def on_document_complete(doc, success):
+            notified.append((doc.id, success))
+
+        async def embedded_chunks_iterator():
+            yield (mock_chunk, None)
+
+        with patch(
+            "qdrant_loader.core.pipeline.workers.upsert_worker.prometheus_metrics"
+        ):
+            await self.upsert_worker.process_embedded_chunks(
+                embedded_chunks_iterator(), on_document_complete=on_document_complete
+            )
+
+        assert notified == [("doc1", False)]
+
+    @pytest.mark.asyncio
+    async def test_process_embedded_chunks_survives_on_document_complete_exception(
+        self,
+    ):
+        """A failing callback must be logged, not crash the pipeline."""
+        doc1, doc2 = Mock(id="doc1"), Mock(id="doc2")
+        chunk1 = _make_chunk("chunk1", doc1, total_chunks=1)
+        chunk2 = _make_chunk("chunk2", doc2, total_chunks=1)
+
+        async def on_document_complete(doc, success):
+            raise RuntimeError("state DB unavailable")
+
+        async def embedded_chunks_iterator():
+            yield (chunk1, [0.1, 0.2, 0.3])
+            yield (chunk2, [0.4, 0.5, 0.6])
+
+        self.upsert_worker.batch_size = 1
+
+        with patch(
+            "qdrant_loader.core.pipeline.workers.upsert_worker.prometheus_metrics"
+        ):
+            result = await self.upsert_worker.process_embedded_chunks(
+                embedded_chunks_iterator(), on_document_complete=on_document_complete
+            )
+
+        # Both documents still end up successful in the result even though
+        # their state-persistence callback blew up.
+        assert result.successfully_processed_documents == {"doc1", "doc2"}

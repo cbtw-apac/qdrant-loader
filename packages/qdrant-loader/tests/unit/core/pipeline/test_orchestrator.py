@@ -1,7 +1,7 @@
 """Tests for PipelineOrchestrator module."""
 
 from typing import cast
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
 from qdrant_loader.config import Settings, SourcesConfig
@@ -177,7 +177,7 @@ class TestPipelineOrchestrator:
             self.mock_sources_config, None, None
         )
         self.document_pipeline.process_batch.assert_called_once_with(
-            mock_documents, None
+            mock_documents, None, on_document_complete=ANY
         )
         self.orchestrator._update_document_states.assert_called_once_with(
             mock_documents, {"doc1", "doc2"}, None
@@ -185,6 +185,103 @@ class TestPipelineOrchestrator:
         mock_change_detector.classify_batch.assert_called_once_with(
             mock_documents, filtered_config, None
         )
+
+    @pytest.mark.asyncio
+    async def test_process_documents_persists_document_state_incrementally(self):
+        """Document state must be persisted as each document finishes inside
+        process_batch, not only once the whole streaming batch returns.
+
+        Regresses the resume bug where an interruption mid-batch (e.g. after
+        only some of ~20 documents in a single sub-256 batch had been
+        embedded/upserted) left no DocumentStateRecord for any of them, so a
+        restart reprocessed documents that had already succeeded. This test
+        drives process_batch's on_document_complete callback *before*
+        process_batch returns, and asserts the state manager was already
+        written to at that point.
+        """
+        mock_documents = cast(
+            list[Document],
+            [
+                Mock(spec=Document, id="doc1", content="content1"),
+                Mock(spec=Document, id="doc2", content="content2"),
+            ],
+        )
+
+        filtered_config = Mock(spec=SourcesConfig)
+        filtered_config.git = ["git_source"]
+        filtered_config.confluence = None
+        filtered_config.jira = None
+        filtered_config.publicdocs = None
+        filtered_config.localfile = None
+
+        self.source_filter.filter_sources.return_value = filtered_config
+
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
+            yield mock_documents
+
+        self.orchestrator._stream_batches_from_sources = fake_stream_batches
+
+        mock_change_detector = AsyncMock()
+        mock_change_detector.classify_batch.return_value = mock_documents
+        state_detector_context = Mock()
+        state_detector_context.__aenter__ = AsyncMock(return_value=mock_change_detector)
+        state_detector_context.__aexit__ = AsyncMock(return_value=None)
+
+        # Snapshot how many documents were already persisted *during* the
+        # process_batch call, before it returns to the orchestrator — this is
+        # exactly the moment an interruption would otherwise lose all state.
+        persisted_count_mid_batch = None
+
+        async def fake_process_batch(batch, project_id, on_document_complete=None):
+            nonlocal persisted_count_mid_batch
+            # Simulate documents completing one at a time *during* the batch,
+            # mirroring UpsertWorker notifying as each document's chunks land.
+            for doc in batch:
+                await on_document_complete(doc, True)
+            persisted_count_mid_batch = (
+                self.state_manager.update_document_states_batch.call_count
+            )
+            mock_result = Mock()
+            mock_result.successfully_processed_documents = {"doc1", "doc2"}
+            mock_result.success_count = 2
+            mock_result.failure_count = 0
+            mock_result.errors = []
+            mock_result.failed_document_ids = set()
+            return mock_result
+
+        self.document_pipeline.process_batch.side_effect = fake_process_batch
+
+        with patch(
+            "qdrant_loader.core.pipeline.orchestrator.StateChangeDetector",
+            return_value=state_detector_context,
+        ):
+            result = await self.orchestrator.process_documents(
+                sources_config=self.mock_sources_config
+            )
+
+        assert result == 2
+        # Both documents were already persisted before process_batch returned
+        # — i.e. incrementally, one single-document write per document.
+        assert persisted_count_mid_batch == 2
+        single_doc_calls = [
+            call
+            for call in self.state_manager.update_document_states_batch.call_args_list
+            if len(call.args[0]) == 1
+        ]
+        assert len(single_doc_calls) == 2
+        persisted_doc_ids = {call.args[0][0].id for call in single_doc_calls}
+        assert persisted_doc_ids == {"doc1", "doc2"}
+        # The end-of-batch call (_update_document_states) still runs afterward
+        # as a safety net, writing both documents together one more time.
+        assert self.state_manager.update_document_states_batch.call_count == 3
 
     @pytest.mark.asyncio
     async def test_process_documents_with_custom_sources_config(self):
@@ -293,7 +390,7 @@ class TestPipelineOrchestrator:
             self.mock_sources_config, "git", "my-repo"
         )
         self.document_pipeline.process_batch.assert_called_once_with(
-            mock_documents, None
+            mock_documents, None, on_document_complete=ANY
         )
         self.orchestrator._update_document_states.assert_called_once_with(
             mock_documents, {"doc1"}, None

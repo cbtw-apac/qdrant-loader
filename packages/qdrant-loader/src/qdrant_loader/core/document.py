@@ -160,7 +160,16 @@ class Document(BaseModel):
         # Normalize all inputs
         normalized_content = content.replace("\r\n", "\n")
         normalized_title = title.replace("\r\n", "\n")
-        normalized_metadata = normalize_value(metadata)
+        # Keys prefixed with "__" are connector-internal bookkeeping (e.g.
+        # "__ingestion_checkpoint", a pagination cursor token) rather than
+        # actual document content. They can legitimately differ between two
+        # fetches of the very same, unchanged document, so including them
+        # would make change detection think the document was modified on
+        # every single ingestion run.
+        hashable_metadata = {
+            k: v for k, v in metadata.items() if not k.startswith("__")
+        }
+        normalized_metadata = normalize_value(hashable_metadata)
 
         # Create a consistent string representation
         content_string = json.dumps(

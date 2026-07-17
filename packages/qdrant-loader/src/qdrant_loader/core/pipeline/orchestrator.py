@@ -377,9 +377,20 @@ class PipelineOrchestrator:
                     if not batch:
                         continue
 
+                    async def _persist_as_completed(
+                        doc: Document, success: bool
+                    ) -> None:
+                        if not success:
+                            return
+                        await self._persist_single_document_state(
+                            doc, current_project_id
+                        )
+
                     batch_result = (
                         await self.components.document_pipeline.process_batch(
-                            batch, current_project_id
+                            batch,
+                            current_project_id,
+                            on_document_complete=_persist_as_completed,
                         )
                     )
                     aggregated_result.success_count += batch_result.success_count
@@ -748,6 +759,36 @@ class PipelineOrchestrator:
                 error_type=type(e).__name__,
             )
             raise
+
+    async def _persist_single_document_state(
+        self,
+        document: Document,
+        project_id: str | None = None,
+    ) -> None:
+        """Persist one document's state as soon as it finishes, not at batch end.
+
+        Streaming batches are bounded at up to 256 documents and state was
+        previously only committed once the *entire* batch finished
+        chunking/embedding/upserting. If the process was interrupted partway
+        through such a batch, documents already durably upserted to Qdrant
+        had no ``DocumentStateRecord`` yet, so a resume would treat them as
+        new and reprocess them. Called from ``UpsertWorker`` the moment a
+        document's last chunk is accounted for, this closes that gap. The
+        end-of-batch ``_update_document_states`` call still runs afterwards
+        as a safety net (idempotent) for anything this callback missed.
+        """
+        try:
+            if not self.components.state_manager._initialized:
+                await self.components.state_manager.initialize()
+            await self.components.state_manager.update_document_states_batch(
+                [document], project_id
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to persist incremental document state for {document.id}: "
+                f"{sanitize_exception_message(e)}",
+                error_type=type(e).__name__,
+            )
 
     async def _update_document_states(
         self,

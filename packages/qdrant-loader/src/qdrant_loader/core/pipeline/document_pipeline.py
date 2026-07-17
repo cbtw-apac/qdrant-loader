@@ -3,6 +3,7 @@
 import asyncio
 import time
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -197,13 +198,20 @@ class DocumentPipeline:
             )
 
     async def process_batch(
-        self, batch: list[Document], current_project_id: str | None = None
+        self,
+        batch: list[Document],
+        current_project_id: str | None = None,
+        on_document_complete: Callable[[Document, bool], Awaitable[None]] | None = None,
     ) -> BatchResult:
         """Process a bounded batch of documents through the pipeline.
 
         Args:
             batch: List of documents to process (bounded size, typically 256)
             current_project_id: Optional project id context for graph extraction/upsert.
+            on_document_complete: Optional async callback invoked as soon as a
+                document's chunks are all accounted for (success or failure),
+                well before this whole batch finishes. Passed straight through
+                to ``UpsertWorker.process_embedded_chunks``.
 
         Returns:
             BatchResult with processing statistics.
@@ -227,7 +235,9 @@ class DocumentPipeline:
 
             try:
                 pipeline_result = await asyncio.wait_for(
-                    self.upsert_worker.process_embedded_chunks(embedded_chunks_iter),
+                    self.upsert_worker.process_embedded_chunks(
+                        embedded_chunks_iter, on_document_complete=on_document_complete
+                    ),
                     timeout=600.0,  # 10 minute timeout per batch
                 )
             except TimeoutError:
