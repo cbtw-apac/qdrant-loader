@@ -761,7 +761,6 @@ class TestPipelineOrchestrator:
                     sources_config=self.mock_sources_config
                 )
 
-
     @pytest.mark.asyncio
     async def test_detect_document_changes_success(self):
         """Test successful document change detection."""
@@ -1551,8 +1550,6 @@ class TestStreamBatchesForceDisablesCheckpointLookup:
             ]
 
         assert len(batches) == 1
-        get_checkpoint.assert_awaited_once_with(
-            "project-1", "Jira", "jira-main"
-        )
+        get_checkpoint.assert_awaited_once_with("project-1", "Jira", "jira-main")
         _, kwargs = get_connector_instance.call_args
         assert kwargs["checkpoint_cursor"] == "stale-cursor"

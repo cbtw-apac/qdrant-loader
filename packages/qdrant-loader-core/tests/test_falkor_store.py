@@ -96,7 +96,9 @@ def test_validate_edge_invalid_type_raises(store):
 
 
 def test_node_payload_uses_node_project(store):
-    node = GraphNode(id="1", label="Document", project="proj", properties={"title": "t"})
+    node = GraphNode(
+        id="1", label="Document", project="proj", properties={"title": "t"}
+    )
 
     payload = store._node_payload(node)
 
@@ -198,7 +200,11 @@ async def test_upsert_nodes_batch_invalid_label_raises(store):
 
 def test_edge_payload_with_project_and_kind(store):
     edge = GraphEdge(
-        source="a", target="b", edge_type="LINKS_TO", project="p", properties={"kind": "x"}
+        source="a",
+        target="b",
+        edge_type="LINKS_TO",
+        project="p",
+        properties={"kind": "x"},
     )
 
     payload = store._edge_payload(edge)
@@ -238,7 +244,11 @@ def test_edge_payload_defaults_to_global_project(store):
 async def test_upsert_edge_with_project_and_kind(store):
     store._run_query = AsyncMock()
     edge = GraphEdge(
-        source="a", target="b", edge_type="LINKS_TO", project="p", properties={"kind": "related"}
+        source="a",
+        target="b",
+        edge_type="LINKS_TO",
+        project="p",
+        properties={"kind": "related"},
     )
 
     await store.upsert_edge(edge)
@@ -306,11 +316,17 @@ async def test_upsert_edges_batch_empty_list_returns_immediately(store):
 
 
 @pytest.mark.asyncio
-async def test_upsert_edges_batch_groups_typed_and_untyped_with_and_without_project(store):
+async def test_upsert_edges_batch_groups_typed_and_untyped_with_and_without_project(
+    store,
+):
     store._run_query = AsyncMock()
     edges = [
         GraphEdge(
-            source="a", target="b", edge_type="LINKS_TO", project="p", properties={"kind": "x"}
+            source="a",
+            target="b",
+            edge_type="LINKS_TO",
+            project="p",
+            properties={"kind": "x"},
         ),
         GraphEdge(source="c", target="d", edge_type="LINKS_TO", properties={}),
     ]
@@ -325,7 +341,9 @@ async def test_upsert_edges_batch_invalid_type_raises(store):
     store._run_query = AsyncMock()
 
     with pytest.raises(ValueError):
-        await store.upsert_edges_batch([GraphEdge(source="a", target="b", edge_type="BOGUS")])
+        await store.upsert_edges_batch(
+            [GraphEdge(source="a", target="b", edge_type="BOGUS")]
+        )
 
     store._run_query.assert_not_awaited()
 
@@ -345,7 +363,9 @@ async def test_neighbors_invalid_edge_type_raises(store):
 async def test_neighbors_with_project_and_edge_types_extracts_falkor_objects(store):
     n = FakeFalkorNode(id=1, labels=["Document"], properties={"id": "doc1"})
     m = FakeFalkorNode(id=2, labels=["Person"], properties={"id": "person1"})
-    rel = FakeFalkorRel(src_node=1, dest_node=2, relation="AUTHORED_BY", properties={"role": "author"})
+    rel = FakeFalkorRel(
+        src_node=1, dest_node=2, relation="AUTHORED_BY", properties={"role": "author"}
+    )
     store._run_query = AsyncMock(return_value=_fake_result([[n, rel, m]]))
 
     subgraph = await store.neighbors(
@@ -381,7 +401,12 @@ async def test_neighbors_without_project_builds_unscoped_query(store):
 async def test_neighbors_extracts_dict_nodes_and_edges(store):
     n = {"id": "doc1", "label": "Document"}
     m = {"id": "person1", "label": "Person"}
-    rel = {"source": "doc1", "target": "person1", "edge_type": "AUTHORED_BY", "properties": {}}
+    rel = {
+        "source": "doc1",
+        "target": "person1",
+        "edge_type": "AUTHORED_BY",
+        "properties": {},
+    }
     store._run_query = AsyncMock(return_value=_fake_result([[n, [rel], m]]))
 
     subgraph = await store.neighbors(node_id="doc1", depth=1)
@@ -399,7 +424,10 @@ async def test_neighbors_extracts_fallback_scalar_nodes(store):
 
     subgraph = await store.neighbors(node_id="1", depth=1)
 
-    assert {node.id for node in subgraph.nodes} == {"raw_node_value", "raw_target_value"}
+    assert {node.id for node in subgraph.nodes} == {
+        "raw_node_value",
+        "raw_target_value",
+    }
     assert subgraph.edges == []
 
 

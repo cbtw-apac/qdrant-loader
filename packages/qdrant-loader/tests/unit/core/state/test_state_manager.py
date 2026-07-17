@@ -154,6 +154,54 @@ async def test_update_document_state(state_manager, sample_document):
 
 
 @pytest.mark.asyncio
+async def test_update_document_state_serialized_for_sqlite(state_manager):
+    """Concurrent single-document updates should be serialized for SQLite backends."""
+    from qdrant_loader.core.state import transitions as _transitions
+
+    doc1 = Document(
+        id="sqlite-lock-doc-1",
+        title="Doc 1",
+        content="Content 1",
+        content_type="text/plain",
+        source_type="test",
+        source="test-source",
+        url="http://test.com/doc1",
+        metadata={},
+    )
+    doc2 = Document(
+        id="sqlite-lock-doc-2",
+        title="Doc 2",
+        content="Content 2",
+        content_type="text/plain",
+        source_type="test",
+        source="test-source",
+        url="http://test.com/doc2",
+        metadata={},
+    )
+
+    active_calls = 0
+    max_concurrent_calls = 0
+
+    async def delayed_update(session_factory, *, document, project_id):
+        nonlocal active_calls, max_concurrent_calls
+        active_calls += 1
+        max_concurrent_calls = max(max_concurrent_calls, active_calls)
+        await asyncio.sleep(0.05)
+        active_calls -= 1
+        return MagicMock(document_id=document.id)
+
+    with patch.object(
+        _transitions, "update_document_state", side_effect=delayed_update
+    ):
+        await asyncio.gather(
+            state_manager.update_document_state(doc1),
+            state_manager.update_document_state(doc2),
+        )
+
+    assert max_concurrent_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_update_document_states_batch_success(state_manager):
     """A batch update commits all documents and returns their records."""
     documents = [
@@ -183,6 +231,60 @@ async def test_update_document_states_batch_success(state_manager):
             source_type="test", source="test-source", document_id=doc.id
         )
         assert stored is not None
+
+
+@pytest.mark.asyncio
+async def test_update_document_states_batch_serialized_for_sqlite(state_manager):
+    """Concurrent batch updates should be serialized for SQLite backends."""
+    from qdrant_loader.core.state import transitions as _transitions
+
+    documents_a = [
+        Document(
+            id="sqlite-batch-a-1",
+            title="A1",
+            content="Content A1",
+            content_type="text/plain",
+            source_type="test",
+            source="test-source",
+            url="http://test.com/a1",
+            metadata={},
+        )
+    ]
+    documents_b = [
+        Document(
+            id="sqlite-batch-b-1",
+            title="B1",
+            content="Content B1",
+            content_type="text/plain",
+            source_type="test",
+            source="test-source",
+            url="http://test.com/b1",
+            metadata={},
+        )
+    ]
+
+    active_calls = 0
+    max_concurrent_calls = 0
+
+    async def delayed_batch_update(session_factory, *, documents, project_id):
+        nonlocal active_calls, max_concurrent_calls
+        active_calls += 1
+        max_concurrent_calls = max(max_concurrent_calls, active_calls)
+        await asyncio.sleep(0.05)
+        active_calls -= 1
+        return [(doc, MagicMock(document_id=doc.id), None) for doc in documents]
+
+    with patch.object(
+        _transitions,
+        "update_document_states_batch",
+        side_effect=delayed_batch_update,
+    ):
+        await asyncio.gather(
+            state_manager.update_document_states_batch(documents_a),
+            state_manager.update_document_states_batch(documents_b),
+        )
+
+    assert max_concurrent_calls == 1
 
 
 @pytest.mark.asyncio
