@@ -274,18 +274,9 @@ class ProjectManager:
                                 CheckpointManager,
                             )
 
-                            try:
-                                await CheckpointManager(session).clear_checkpoint(
-                                    project_id, source_type, source_name
-                                )
-                            except Exception as e:
-                                self.logger.warning(
-                                    "Failed to clear stale checkpoint after "
-                                    "source configuration change",
-                                    source_type=source_type,
-                                    source=source_name,
-                                    error=str(e),
-                                )
+                            await CheckpointManager(session).clear_checkpoint(
+                                project_id, source_type, source_name
+                            )
                 else:
                     # Create new source
                     self.logger.debug(
