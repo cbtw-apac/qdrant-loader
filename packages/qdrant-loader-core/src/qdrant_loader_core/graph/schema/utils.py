@@ -7,6 +7,7 @@ from .versioning import get_version_query, set_version_query
 
 logger = logging.getLogger(__name__)
 
+
 async def _apply_v1(graph_store) -> None:
     await _ensure_indexes(graph_store)
     await apply(graph_store)
@@ -16,6 +17,7 @@ MIGRATIONS = {
     1: _apply_v1,
 }
 LATEST_VERSION = max(MIGRATIONS)
+
 
 # ------------------------
 # ENTRY POINT

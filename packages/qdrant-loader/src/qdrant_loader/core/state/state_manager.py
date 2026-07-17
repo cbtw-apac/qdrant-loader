@@ -34,6 +34,7 @@ class StateManager:
         """Initialize the state manager with configuration."""
         self.config = config
         self._initialized = False
+        self._is_sqlite_backend = False
         self._engine: AsyncEngine | None = None
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
         self._queue_db_op_lock = asyncio.Lock()
@@ -107,6 +108,7 @@ class StateManager:
             # Handle special databases and generate URL
             database_url = _gen_url(db_path_str)
             self.logger.debug(f"Generated database URL: {database_url}")
+            self._is_sqlite_backend = database_url.startswith("sqlite")
 
             # Create database engine and session factory
             self.logger.debug("Creating database engine and session factory")
@@ -455,6 +457,14 @@ class StateManager:
             f"Updating document state for {document.source_type}:{document.source}:{document.id} (project: {project_id})"
         )
         try:
+            if self._is_sqlite_backend:
+                async with self._queue_db_op_lock:
+                    return await _transitions.update_document_state(
+                        self._session_factory,  # type: ignore[arg-type]
+                        document=document,
+                        project_id=project_id,
+                    )
+
             return await _transitions.update_document_state(
                 self._session_factory,  # type: ignore[arg-type]
                 document=document,
@@ -490,6 +500,14 @@ class StateManager:
             f"Updating document state for {len(documents)} documents in one batch "
             f"(project: {project_id})"
         )
+        if self._is_sqlite_backend:
+            async with self._queue_db_op_lock:
+                return await _transitions.update_document_states_batch(
+                    self._session_factory,  # type: ignore[arg-type]
+                    documents=documents,
+                    project_id=project_id,
+                )
+
         return await _transitions.update_document_states_batch(
             self._session_factory,  # type: ignore[arg-type]
             documents=documents,
