@@ -14,7 +14,7 @@ from qdrant_loader.utils.logging import LoggingConfig
 logger = LoggingConfig.get_logger(__name__)
 
 WEBHOOK_SECRET_ENV_VAR = "WEBHOOK_SECRET"
-WEBHOOK_QUERY_PARAM = "token"
+WEBHOOK_QUERY_PARAM = "secret"
 
 WEBHOOK_USE_SECRETS_MANAGER = os.getenv(
     "WEBHOOK_USE_SECRETS_MANAGER", "false"
@@ -47,6 +47,36 @@ def _load_project_secrets() -> dict[str, str]:
     except json.JSONDecodeError:
         logger.warning("WEBHOOK_SECRETS is not valid JSON; ignoring")
     return {}
+
+
+def webhook_auth_configured() -> bool:
+    """Return True if at least one webhook authentication method is configured.
+
+    Checked at server startup so misconfiguration fails closed instead of
+    silently accepting unauthenticated requests.
+    """
+    has_global_secret = bool(os.getenv(WEBHOOK_SECRET_ENV_VAR)) or bool(
+        os.getenv("WEBHOOK_SECRETS")
+    )
+    has_project_secret = any(
+        key.startswith("WEBHOOK_SECRET_") and bool(value)
+        for key, value in os.environ.items()
+    )
+    # Read fresh rather than trusting the import-time WEBHOOK_ENABLE_COGNITO_JWT
+    # constant: this is called before .env may have been loaded into os.environ.
+    cognito_enabled = os.getenv("WEBHOOK_ENABLE_COGNITO_JWT", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    return has_global_secret or has_project_secret or cognito_enabled
+
+
+WEBHOOK_AUTH_NOT_CONFIGURED_MESSAGE = (
+    "Webhook authentication is not configured. Set WEBHOOK_SECRET, "
+    "WEBHOOK_SECRETS, WEBHOOK_SECRET_<PROJECT_ID>, or enable Cognito JWT "
+    "(WEBHOOK_ENABLE_COGNITO_JWT=true)."
+)
 
 
 async def get_webhook_secret(
@@ -171,7 +201,7 @@ async def verify_webhook_token(
     """Verify webhook access for Jira-compatible endpoints.
 
     Jira Cloud only supports shared-secret query tokens, so webhook routes accept
-    the project-scoped WEBHOOK_SECRET via Bearer header or ?token= query param.
+    the project-scoped WEBHOOK_SECRET via Bearer header or ?secret= query param.
     Cognito JWT is validated when enabled and the bearer token is a JWT.
     """
     secret = await get_webhook_secret(project_id=project_id)
