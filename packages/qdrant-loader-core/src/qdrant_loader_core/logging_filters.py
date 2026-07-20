@@ -20,6 +20,45 @@ class ApplicationFilter(logging.Filter):
         return True
 
 
+class UvicornAccessRedactFilter(logging.Filter):
+    """Redacts secret/token query-string values from uvicorn's access log line.
+
+    uvicorn logs the raw request line (including the query string) via
+    ``record.args`` on the "uvicorn.access" logger, e.g.
+    ``args = (client_addr, method, "/path?token=abc123", http_version, status)``.
+    That logger has ``propagate=False`` in uvicorn's default logging config, so
+    it never reaches the root logger's handlers/filters (including
+    :class:`RedactionFilter`) — the secret would otherwise be written to the
+    access log in plaintext. Attach this filter directly to the
+    "uvicorn.access" logger; per-logger filters run in ``Logger.handle()``
+    before any handler, so this applies regardless of what handlers uvicorn's
+    own dictConfig installs (dictConfig only replaces handlers, not filters).
+    """
+
+    _SENSITIVE_QUERY_PARAM = re.compile(
+        r"(?i)([?&](?:token|secret|signature|password|api[_-]?key|access[_-]?token)=)[^&\s\"]+"
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.args, tuple) and len(record.args) >= 3:
+                path = record.args[2]
+                if isinstance(path, str) and "?" in path:
+                    redacted = self._SENSITIVE_QUERY_PARAM.sub(
+                        r"\1***REDACTED***", path
+                    )
+                    if redacted != path:
+                        record.args = (
+                            record.args[0],
+                            record.args[1],
+                            redacted,
+                            *record.args[3:],
+                        )
+        except Exception:
+            pass
+        return True
+
+
 class RedactionFilter(logging.Filter):
     """Redacts obvious secrets from stdlib log records."""
 
