@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import pytest
 from fastapi import HTTPException
@@ -6,6 +7,7 @@ from qdrant_loader.webhooks.auth import (
     _get_webhook_secret_from_env,
     get_webhook_secret,
     verify_webhook_token,
+    webhook_auth_configured,
 )
 
 
@@ -14,6 +16,44 @@ def clear_secret_cache():
     _get_webhook_secret_from_env.cache_clear()
     yield
     _get_webhook_secret_from_env.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def clear_webhook_env(monkeypatch):
+    """Ensure no leftover WEBHOOK_* env vars leak between tests."""
+    for key in list(os.environ):
+        if key.startswith("WEBHOOK_SECRET") or key == "WEBHOOK_ENABLE_COGNITO_JWT":
+            monkeypatch.delenv(key, raising=False)
+
+
+def test_webhook_auth_configured_false_when_nothing_set():
+    assert webhook_auth_configured() is False
+
+
+def test_webhook_auth_configured_false_when_secret_is_empty_string(monkeypatch):
+    # AIKH-2368: WEBHOOK_SECRET="" (present but empty) must be treated as unset.
+    monkeypatch.setenv("WEBHOOK_SECRET", "")
+    assert webhook_auth_configured() is False
+
+
+def test_webhook_auth_configured_true_with_global_secret(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_SECRET", "secret")
+    assert webhook_auth_configured() is True
+
+
+def test_webhook_auth_configured_true_with_secrets_json(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_SECRETS", '{"project1": "secret"}')
+    assert webhook_auth_configured() is True
+
+
+def test_webhook_auth_configured_true_with_project_scoped_secret(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_SECRET_MYPROJECT", "secret")
+    assert webhook_auth_configured() is True
+
+
+def test_webhook_auth_configured_true_with_cognito_enabled(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_ENABLE_COGNITO_JWT", "true")
+    assert webhook_auth_configured() is True
 
 
 def test_get_webhook_secret_global(monkeypatch):
