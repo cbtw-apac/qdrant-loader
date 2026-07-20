@@ -10,6 +10,7 @@
    - Data Sources (`docs/users/detailed-guides/data-sources/`)
    - File Conversion (`docs/users/detailed-guides/file-conversion/`)
    - MCP Server (`docs/users/detailed-guides/mcp-server/`)
+   - Incremental Ingestion & Resume (`docs/users/detailed-guides/incremental-ingestion/`)
    - Workflows (`docs/users/workflows/`)
    - Troubleshooting (`docs/users/troubleshooting/`)
 
