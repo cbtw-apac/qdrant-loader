@@ -2,6 +2,7 @@
 
 import logging
 import re
+from urllib.parse import unquote_plus
 
 import structlog
 
@@ -104,19 +105,41 @@ class UvicornAccessRedactFilter(logging.Filter):
     handlers, not filters).
     """
 
-    _SENSITIVE_QUERY_PARAM = re.compile(
-        r"(?i)([?&](?:token|secret|signature|password|authorization|"
-        r"(?:api|access|private)[_-]?key|access[_-]?token)=)[^&\s\"]+"
-    )
+    _SENSITIVE_QUERY_KEYS = {
+        "token",
+        "secret",
+        "signature",
+        "password",
+        "authorization",
+        "api_key",
+        "api-key",
+        "access_key",
+        "access-key",
+        "private_key",
+        "private-key",
+        "access_token",
+        "access-token",
+    }
+    _QUERY_PAIR = re.compile(r'([?&])([^=&\s"]+)=([^&\s"]*)')
+
+    @classmethod
+    def _redact_query_pair(cls, match: re.Match[str]) -> str:
+        sep, raw_key, _value = match.groups()
+        # uvicorn logs the raw, still percent-encoded request line, so a key
+        # like "sec%72et" would slip past a literal match while Starlette/
+        # FastAPI (which percent-decodes query keys during parsing) still
+        # resolves it to "secret" and accepts it as the webhook secret.
+        # Decode before comparing so encoded keys are caught too.
+        if unquote_plus(raw_key).lower() in cls._SENSITIVE_QUERY_KEYS:
+            return f"{sep}{raw_key}=***REDACTED***"
+        return match.group(0)
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             if isinstance(record.args, tuple) and len(record.args) >= 3:
                 path = record.args[2]
                 if isinstance(path, str) and "?" in path:
-                    redacted = self._SENSITIVE_QUERY_PARAM.sub(
-                        r"\1***REDACTED***", path
-                    )
+                    redacted = self._QUERY_PAIR.sub(self._redact_query_pair, path)
                     if redacted != path:
                         record.args = (
                             record.args[0],
