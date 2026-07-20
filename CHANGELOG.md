@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-07-08
+
+### Added
+
+#### Qdrant-loader
+
+- PostgreSQL state DB backend via `STATE_DB_URL`/`state_management.database_url` with asyncpg pooling; SQLite remains the default [#349]
+- Docker deployment now includes `postgres:16` and defaults state DB to Postgres [#349]
+- Alembic migrations now support PostgreSQL [#349]
+- Ingestion checkpoints persisted to state DB for resume after interruptions [#298]
+- Checkpoint/resume support in `serve`, webhook, and worker queue flows [#338]
+- Worker activity tracking and startup logging for queue worker pool [#342]
+- Qdrant loader and MCP server Docker assets reorganized under `docker/` [#346]
+- Concurrency settings for document ingestion pipeline and `serve` execution [#356]
+
+#### Qdrant-loader-core
+
+- Docling conversion engine and Docling-based chunking strategy [#337]
+- Graph store abstraction and entity extractor for cross-document relationships [#302]
+- Graph write hook in `DocumentPipeline.process_batch()` for node/edge upserts [#313]
+
+#### Qdrant-loader-mcp-server
+
+- `find_ticket_dependencies` tool for the intelligence handler [#344]
+
+### Fixed
+
+#### Qdrant-loader
+
+- `qdrant_manager.create_collection` now uses `global.llm.embeddings.vector_size` instead of the legacy fallback [#340]
+- Native `stream_documents()` for Confluence, Git, PublicDocs, and LocalFile connectors (fake streaming fallback removed) [#324]
+- Numbered-list styling and client-side syntax highlighting on the website build [#335]
+- Queue claiming supports `job_types` filtering without race-related under-processing [#355]
+- XLSX post-processing surfaces sheet headings for both `sheet: <name>` and plain docling group names [#355]
+
+### Changed
+
+#### Qdrant-loader
+
+- Website base UI feedback: padding and fixed logo sizing [#319]
+- Embedding and upsert workers now process batches in parallel for better ingestion throughput [#353]
+
+#### Qdrant-loader-mcp-server
+
+- MCP server migrated to [FastMCP](https://gofastmcp.com) v3 with typed-signature tool schemas and framework-managed stdio/streamable-HTTP transports; all 11 tools retained [#341]
+- HTTP transport now uses stateless JSON responses at `POST /mcp` (no initialize/session handshake); stdio transport unchanged [#341]
+
+### Removed
+
+#### Qdrant-loader-mcp-server
+
+- Hand-rolled JSON-RPC layer (`MCPHandler`, `mcp/schemas/`, `mcp/models.py`, legacy `server.py` + `transport/`, and custom stdio loop in `cli.py`) [#341]
+- Non-standard `listOfferings` and top-level tool method invocation (e.g. `{"method": "search"}`); use MCP `tools/list` and `tools/call` [#341]
+- Unused dependencies: `fastapi`, `jsonrpcclient`, `jsonrpcserver` [#341]
+
 ## [1.0.3] - 2026-06-08
 
 ### Added
@@ -665,6 +720,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Change detection for incremental updates [#21]
 - Signal handling for graceful shutdown [#21]
 
+[1.0.4]: https://github.com/martin-papy/qdrant-loader/compare/qdrant-loader-v1.0.3...qdrant-loader-v1.0.4
 [1.0.3]: https://github.com/martin-papy/qdrant-loader/compare/qdrant-loader-v1.0.2...qdrant-loader-v1.0.3
 [1.0.2]: https://github.com/martin-papy/qdrant-loader/compare/qdrant-loader-v1.0.1...qdrant-loader-v1.0.2
 [1.0.1]: https://github.com/martin-papy/qdrant-loader/compare/qdrant-loader-v1.0.0...qdrant-loader-v1.0.1

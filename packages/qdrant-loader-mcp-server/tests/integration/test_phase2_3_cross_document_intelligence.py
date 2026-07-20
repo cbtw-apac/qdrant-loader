@@ -31,13 +31,10 @@ class TestCrossDocumentIntelligenceIntegration:
     """Integration tests for the complete cross-document intelligence workflow."""
 
     @pytest.fixture
-    async def spacy_analyzer(self):
+    def spacy_analyzer(self):
         """Create a real SpaCy analyzer for integration testing."""
         # Use a lightweight model for testing
-        analyzer = SpaCyQueryAnalyzer(spacy_model="en_core_web_sm")
-        await analyzer.initialize()
-        yield analyzer
-        await analyzer.cleanup()
+        return SpaCyQueryAnalyzer(spacy_model="en_core_web_sm")
 
     @pytest.fixture
     def intelligence_engine(self, spacy_analyzer):

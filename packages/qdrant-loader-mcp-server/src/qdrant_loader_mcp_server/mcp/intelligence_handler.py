@@ -3,11 +3,16 @@
 import asyncio
 import time
 import uuid
+from pathlib import Path
 from typing import Any
+
+from qdrant_loader.config import get_settings, initialize_config
+from qdrant_loader_core.graph import get_graph_store
 
 from ..search.engine import SearchEngine
 from ..utils import LoggingConfig
 from .formatters import MCPFormatters
+from .graph_handler import handle_find_ticket_dependencies
 from .handlers.intelligence import (
     get_or_create_document_id as _get_or_create_document_id_fn,
 )
@@ -21,7 +26,12 @@ logger = LoggingConfig.get_logger("src.mcp.intelligence_handler")
 class IntelligenceHandler:
     """Handler for cross-document intelligence operations."""
 
-    def __init__(self, search_engine: SearchEngine, protocol: MCPProtocol):
+    def __init__(
+        self,
+        search_engine: SearchEngine,
+        protocol: MCPProtocol,
+        config_path: Path | None = None,
+    ):
         """Initialize intelligence handler."""
         self.search_engine = search_engine
         self.protocol = protocol
@@ -30,6 +40,37 @@ class IntelligenceHandler:
         self._ttl = 300
         self._max_sessions = 500
         self._lock = asyncio.Lock()
+        self._graph_store = None
+        self._graph_store_lock = asyncio.Lock()
+        # Resolved by fastmcp_app._lifespan (MCP_CONFIG / --config) so the graph store loads the same config as the search engine.
+        self._config_path = config_path
+
+    async def _get_graph_store(self):
+        """Lazy-initialize graph store with proper locking."""
+        async with self._graph_store_lock:
+            if self._graph_store is None:
+                config_path = self._config_path or (Path.cwd() / "config.yaml")
+                project_root = config_path.parent
+                initialize_config(
+                    yaml_path=config_path,
+                    env_path=project_root / ".env",
+                    skip_validation=True,
+                )
+                settings = get_settings()
+                graph_cfg = getattr(settings.global_config, "graph", None)
+                self._graph_store = await get_graph_store(
+                    **(graph_cfg.store_kwargs() if graph_cfg else {})
+                )
+            return self._graph_store
+
+    async def _run_graph_query(
+        self,
+        cypher: str,
+        params: dict | None = None,
+    ):
+
+        store = await self._get_graph_store()
+        return await store.query_cypher(cypher, params or {})
 
     def _get_or_create_document_id(self, doc: Any) -> str:
         return _get_or_create_document_id_fn(doc)
@@ -948,3 +989,12 @@ class IntelligenceHandler:
             overflow = len(self._cluster_store) - self._max_sessions
             for k, _ in sorted_items[:overflow]:
                 self._cluster_store.pop(k, None)
+
+    @staticmethod
+    def _validate_depth(depth: int) -> int:
+        if depth < 1 or depth > 10:
+            raise ValueError("depth must be between 1 and 10")
+        return depth
+
+
+IntelligenceHandler.handle_find_ticket_dependencies = handle_find_ticket_dependencies

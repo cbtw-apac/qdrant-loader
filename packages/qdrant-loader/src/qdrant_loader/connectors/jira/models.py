@@ -1,6 +1,7 @@
 """Data models for Jira connector."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
@@ -35,6 +36,26 @@ class JiraAttachment(BaseModel):
     author: JiraUser = Field(..., description="User who attached the file")
 
 
+class JiraIssueLink(BaseModel):
+    """A single Jira issue link, preserving direction and relationship type."""
+
+    key: str = Field(..., description="Key of the linked issue")
+    link_type: str | None = Field(
+        None, description="Jira link type name (e.g. 'Blocks', 'Cloners')"
+    )
+    direction: Literal["inward", "outward"] = Field(
+        ...,
+        description="Direction of the link relative to this issue: 'inward' or 'outward'",
+    )
+    relation: str | None = Field(
+        None,
+        description=(
+            "Human-readable relationship phrase from this issue's perspective "
+            "(e.g. 'blocks', 'is cloned by')"
+        ),
+    )
+
+
 class JiraIssue(BaseModel):
     """Jira issue model."""
 
@@ -64,4 +85,8 @@ class JiraIssue(BaseModel):
     )
     linked_issues: list[str] = Field(
         default_factory=list, description="List of linked issue keys"
+    )
+    linked_issue_details: list[JiraIssueLink] = Field(
+        default_factory=list,
+        description="Linked issues with relationship type and direction",
     )

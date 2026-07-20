@@ -10,7 +10,9 @@ from pydantic import Field
 
 from qdrant_loader.config.base import BaseConfig
 from qdrant_loader.config.chunking import ChunkingConfig
+from qdrant_loader.config.concurrency import ConcurrencyConfig
 from qdrant_loader.config.embedding import EmbeddingConfig
+from qdrant_loader.config.graph import GraphConfig
 from qdrant_loader.config.qdrant import QdrantConfig
 from qdrant_loader.config.sources import SourcesConfig
 from qdrant_loader.config.state import StateManagementConfig
@@ -61,6 +63,13 @@ class GlobalConfig(BaseConfig):
         default_factory=WorkersConfig,
         description="Worker scheduling and runtime configuration",
     )
+    concurrency: ConcurrencyConfig = Field(
+        default_factory=ConcurrencyConfig,
+        description="Ingestion pipeline concurrency configuration (chunk/embed/upsert)",
+    )
+    graph: GraphConfig = Field(
+        default_factory=GraphConfig, description="Graph configuration"
+    )
 
     def __init__(self, **data):
         """Initialize global configuration."""
@@ -95,13 +104,19 @@ class GlobalConfig(BaseConfig):
             "file_conversion": {
                 "max_file_size": self.file_conversion.max_file_size,
                 "conversion_timeout": self.file_conversion.conversion_timeout,
+                # EngineKind is a StrEnum; emit the plain string so the merged
+                # dict re-parses cleanly through the parser merge path.
+                "engine": self.file_conversion.engine.value,
                 "markitdown": {
                     "enable_llm_descriptions": self.file_conversion.markitdown.enable_llm_descriptions,
                     "llm_model": self.file_conversion.markitdown.llm_model,
                     "llm_endpoint": self.file_conversion.markitdown.llm_endpoint,
                     "llm_api_key": self.file_conversion.markitdown.llm_api_key,
                 },
+                "docling": self.file_conversion.docling.model_dump(mode="json"),
             },
             "qdrant": self.qdrant.to_dict(),
             "workers": self.workers.to_dict(),
+            "concurrency": self.concurrency.to_dict(),
+            "graph": self.graph.to_dict(),
         }

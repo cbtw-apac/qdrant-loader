@@ -50,6 +50,7 @@ RESERVED_NAMES = {
     "parent_key",
     "subtasks",
     "linked_issues",
+    "linked_issue_details",
 }
 
 

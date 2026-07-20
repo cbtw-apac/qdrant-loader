@@ -12,6 +12,7 @@ from qdrant_loader.core.project_manager import ProjectManager
 from qdrant_loader.core.qdrant_manager import QdrantManager
 from qdrant_loader.core.state.state_change_detector import StateChangeDetector
 from qdrant_loader.core.state.state_manager import StateManager
+from qdrant_loader.core.worker.handlers import PermanentJobError
 from qdrant_loader.utils.logging import LoggingConfig
 from qdrant_loader.utils.sensitive import sanitize_exception_message
 
@@ -21,6 +22,14 @@ from .source_processor import SourceProcessor
 from .workers.upsert_worker import PipelineResult
 
 logger = LoggingConfig.get_logger(__name__)
+
+
+def _safe_document_size(doc: Document) -> int:
+    """Best-effort byte size of a document for metrics purposes."""
+    try:
+        return int(doc.metadata.get("size", 0))
+    except (TypeError, ValueError, AttributeError):
+        return 0
 
 
 class PipelineComponents:
@@ -62,6 +71,8 @@ class PipelineOrchestrator:
         since: datetime | None = None,
         project_id: str | None = None,
         seen_uris: set[str] | None = None,
+        resume: bool = True,
+        force: bool = False,
     ) -> AsyncIterator[list[Document]]:
         """Stream source documents in bounded micro-batches.
 
@@ -79,11 +90,50 @@ class PipelineOrchestrator:
             if not source_configs:
                 return
 
+            # Tracks the checkpoint cursor of the last document with checkpoint
+            # info, so a batch is flushed before crossing a page boundary
+            # (see _process_source_type body below for why this matters).
+            last_cursor_value = None
+            # True once a size-based mid-page flush has fired for the current page.
+            # Used to emit the warning only once per overflowing page.
+            page_has_overflowed = False
+
+            async def connector_factory_with_checkpoint(src_config):
+                # Determine if we should attempt to resume from a checkpoint
+                checkpoint_cursor = None
+                try:
+                    if resume and not force and project_id is not None:
+                        # Lazy import to avoid cycles
+                        from qdrant_loader.core.state.checkpoint_manager import (
+                            CheckpointManager,
+                        )
+
+                        async with (
+                            await self.components.state_manager.get_session() as session
+                        ):
+                            cp_mgr = CheckpointManager(session)
+                            cp = await cp_mgr.get_checkpoint(
+                                project_id, source_type_name, src_config.source
+                            )
+                            if cp:
+                                checkpoint_cursor = cp.cursor_value
+                except Exception:
+                    # On any failure retrieving checkpoint, log and continue without it
+                    logger.debug(
+                        "Checkpoint lookup failed, proceeding without checkpoint",
+                        source_type=source_type_name,
+                        source=src_config.source,
+                    )
+
+                return get_connector_instance(
+                    src_config, checkpoint_cursor=checkpoint_cursor
+                )
+
             async for (
                 document
             ) in self.components.source_processor.stream_source_documents(
                 source_configs,
-                get_connector_instance,
+                connector_factory_with_checkpoint,
                 source_type_name,
                 since=since,
             ):
@@ -111,8 +161,51 @@ class PipelineOrchestrator:
                     except Exception:
                         pass
 
+                # Flush the batch before crossing a checkpoint page boundary so
+                # that a saved checkpoint never covers a partially-upserted page
+                # (a batch never spans two different page cursors).
+                doc_metadata = getattr(document, "metadata", None) or {}
+                cp_info = (
+                    doc_metadata.get("__ingestion_checkpoint")
+                    if isinstance(doc_metadata, dict)
+                    else None
+                )
+                if isinstance(cp_info, dict) and cp_info:
+                    cursor_value = cp_info.get("cursor_value")
+                    if (
+                        last_cursor_value is not None
+                        and cursor_value != last_cursor_value
+                        and batch
+                    ):
+                        # Page boundary: all docs for the previous cursor are
+                        # accumulated; safe to save the checkpoint now.
+                        yield batch.copy()
+                        batch.clear()
+                        page_has_overflowed = False  # reset for the new page
+                    last_cursor_value = cursor_value
+
                 batch.append(document)
                 if len(batch) >= batch_size:
+                    # A size-based flush that fires while we are still inside a
+                    # page (same cursor_value across docs) must NOT carry
+                    # __ingestion_checkpoint.  Saving the page token here would
+                    # cause resume to skip the page tail on crash (Jira WS-2
+                    # regression: 100 issues × avg attachments > batch_size=256).
+                    if last_cursor_value is not None:
+                        if not page_has_overflowed:
+                            logger.warning(
+                                "Source page exceeds batch_size; stripping "
+                                "__ingestion_checkpoint from mid-page flush to "
+                                "prevent resume from skipping the page tail",
+                                source_type=source_type_name,
+                                page_cursor=last_cursor_value,
+                                batch_size=batch_size,
+                            )
+                            page_has_overflowed = True
+                        for doc in batch:
+                            doc_meta = getattr(doc, "metadata", None)
+                            if isinstance(doc_meta, dict):
+                                doc_meta.pop("__ingestion_checkpoint", None)
                     yield batch.copy()
                     batch.clear()
 
@@ -155,7 +248,8 @@ class PipelineOrchestrator:
         project_id: str | None = None,
         force: bool = False,
         since: datetime | None = None,
-    ) -> list[Document]:
+        resume: bool = True,
+    ) -> int:
         """Main entry point for document processing.
 
         Args:
@@ -167,15 +261,15 @@ class PipelineOrchestrator:
             since: Only stream documents updated after this timestamp (connector-level
                 filtering). Connectors that do not yet support time-based filtering will
                 fall back to full fetch with hash-based change detection.
+            resume: Whether to resume from the last checkpoint when available.
 
         Returns:
-            List of processed documents
+            Number of documents successfully processed.
         """
         logger.info("🚀 Starting document ingestion")
         self.last_pipeline_result = None
 
         try:
-            # Determine sources configuration to use
             if sources_config:
                 # Use provided sources config (backward compatibility)
                 logger.debug("Using provided sources configuration")
@@ -230,11 +324,25 @@ class PipelineOrchestrator:
             ):
                 raise ValueError(f"No sources found for type '{source_type}'")
 
+            # Fail fast when destination collection is unavailable. Without this
+            # preflight, a job with no changed documents would incorrectly return
+            # success even while Qdrant is misconfigured/unreachable.
+            try:
+                await self.components.qdrant_manager.assert_collection_accessible()
+            except Exception as e:
+                raise PermanentJobError(
+                    f"Qdrant collection is unavailable: {sanitize_exception_message(e)}"
+                ) from e
+
             # Stream documents in bounded micro-batches and process each batch
             total_documents = 0
-            processed_documents: list[Document] = []
+            processed_count = 0
             aggregated_result = PipelineResult()
             batch_count = 0
+            counted_success_doc_ids: set[str] = set()
+            counted_failed_doc_ids: set[str] = set()
+            checkpoint_sources_to_clear: set[tuple[str, str]] = set()
+            streamed_checkpoint_sources: set[tuple[str, str]] = set()
 
             if not force and not self.components.state_manager._initialized:
                 logger.debug("Initializing state manager for change detection")
@@ -246,27 +354,31 @@ class PipelineOrchestrator:
                     self.components.state_manager
                 ).__aenter__()
 
-            seen_uris: set[str] = set()
             try:
-                # Prefer calling the new signature but fall back to the
-                # legacy 3-arg signature for backwards compatibility / tests.
-                try:
-                    stream_iter = self._stream_batches_from_sources(
-                        filtered_config,
-                        256,
-                        since,
-                        project_id=current_project_id,
-                        seen_uris=seen_uris,
-                    )
-                except TypeError:
-                    # Callable likely expects the old signature
-                    stream_iter = self._stream_batches_from_sources(
-                        filtered_config, 256, since
-                    )
+                stream_iter = self._stream_batches_from_sources(
+                    filtered_config,
+                    256,
+                    since,
+                    project_id=current_project_id,
+                    resume=resume,
+                    force=force,
+                )
 
                 async for batch in stream_iter:
                     total_documents += len(batch)
                     batch_count += 1
+
+                    for doc in batch:
+                        metadata = getattr(doc, "metadata", None) or {}
+                        cp_info = (
+                            metadata.get("__ingestion_checkpoint")
+                            if isinstance(metadata, dict)
+                            else None
+                        )
+                        if isinstance(cp_info, dict) and cp_info:
+                            streamed_checkpoint_sources.add(
+                                (doc.source_type, doc.source)
+                            )
 
                     if not force and change_detector is not None:
                         batch = await change_detector.classify_batch(
@@ -276,17 +388,40 @@ class PipelineOrchestrator:
                     if not batch:
                         continue
 
+                    async def _persist_as_completed(
+                        doc: Document, success: bool
+                    ) -> None:
+                        if not success:
+                            return
+                        await self._persist_single_document_state(
+                            doc, current_project_id
+                        )
+
                     batch_result = (
-                        await self.components.document_pipeline.process_batch(batch)
+                        await self.components.document_pipeline.process_batch(
+                            batch,
+                            current_project_id,
+                            on_document_complete=_persist_as_completed,
+                        )
                     )
                     aggregated_result.success_count += batch_result.success_count
                     aggregated_result.error_count += batch_result.failure_count
                     aggregated_result.errors.extend(batch_result.errors)
-                    aggregated_result.successfully_processed_documents.update(
+                    new_success_doc_ids = (
                         batch_result.successfully_processed_documents
+                        - counted_success_doc_ids
                     )
-                    aggregated_result.failed_document_ids.update(
-                        batch_result.failed_document_ids
+                    counted_success_doc_ids.update(new_success_doc_ids)
+                    aggregated_result.processed_document_count = len(
+                        counted_success_doc_ids
+                    )
+
+                    new_failed_doc_ids = (
+                        batch_result.failed_document_ids - counted_failed_doc_ids
+                    )
+                    counted_failed_doc_ids.update(new_failed_doc_ids)
+                    aggregated_result.failed_document_count = len(
+                        counted_failed_doc_ids
                     )
 
                     if batch_result.successfully_processed_documents:
@@ -295,14 +430,71 @@ class PipelineOrchestrator:
                             batch_result.successfully_processed_documents,
                             current_project_id,
                         )
-                        processed_documents.extend(
-                            [
-                                doc
-                                for doc in batch
-                                if doc.id
-                                in batch_result.successfully_processed_documents
-                            ]
-                        )
+                        batch_counted_doc_ids: set[str] = set()
+                        for doc in batch:
+                            if (
+                                doc.id in new_success_doc_ids
+                                and doc.id not in batch_counted_doc_ids
+                            ):
+                                batch_counted_doc_ids.add(doc.id)
+                                processed_count += 1
+                                aggregated_result.total_size_bytes += (
+                                    _safe_document_size(doc)
+                                )
+                        # Persist checkpoints found on documents (WS-2).
+                        # Save once per source with the furthest-advanced cursor
+                        # in this batch, not once per document.
+                        if resume and current_project_id is not None and not force:
+                            try:
+                                from qdrant_loader.core.state.checkpoint_manager import (
+                                    Checkpoint,
+                                    CheckpointManager,
+                                )
+
+                                # Iteration order is the streaming order, so the
+                                # last cp_info seen per source is the furthest
+                                # along (later cursor overwrites earlier ones).
+                                checkpoints_to_save: dict[
+                                    tuple[str, str], Checkpoint
+                                ] = {}
+                                for doc in batch:
+                                    if (
+                                        doc.id
+                                        not in batch_result.successfully_processed_documents
+                                    ):
+                                        continue
+                                    metadata = getattr(doc, "metadata", None) or {}
+                                    cp_info = (
+                                        metadata.get("__ingestion_checkpoint")
+                                        if isinstance(metadata, dict)
+                                        else None
+                                    )
+                                    if not isinstance(cp_info, dict) or not cp_info:
+                                        continue
+                                    key = (doc.source_type, doc.source)
+                                    checkpoints_to_save[key] = Checkpoint(
+                                        project_id=current_project_id,
+                                        source_type=doc.source_type,
+                                        source=doc.source,
+                                        cursor_kind=cp_info.get("cursor_kind"),
+                                        cursor_value=cp_info.get("cursor_value"),
+                                        batch_index=cp_info.get("batch_index", 0),
+                                    )
+                                    checkpoint_sources_to_clear.add(key)
+
+                                if checkpoints_to_save:
+                                    async with (
+                                        await self.components.state_manager.get_session() as session
+                                    ):
+                                        cp_mgr = CheckpointManager(session)
+                                        for checkpoint in checkpoints_to_save.values():
+                                            await cp_mgr.save_checkpoint(checkpoint)
+                            except Exception as e:
+                                logger.error(
+                                    "Failed to persist checkpoint after batch",
+                                    error=str(e),
+                                    error_type=type(e).__name__,
+                                )
 
                 if total_documents == 0 and not force:
                     logger.warning(
@@ -314,39 +506,77 @@ class PipelineOrchestrator:
 
                 if total_documents == 0 and force:
                     logger.info("✅ No documents found from sources")
-                    return []
+                    return 0
 
-                if not force and not processed_documents:
+                sources_to_clear = (
+                    checkpoint_sources_to_clear | streamed_checkpoint_sources
+                )
+
+                # On a clean successful run, clear any saved checkpoints for
+                # the project/sources processed (prevents stale resume state).
+                if (
+                    resume
+                    and current_project_id is not None
+                    and not force
+                    and aggregated_result.error_count == 0
+                    and sources_to_clear
+                ):
+                    try:
+                        from qdrant_loader.core.state.checkpoint_manager import (
+                            CheckpointManager,
+                        )
+
+                        async with (
+                            await self.components.state_manager.get_session() as session
+                        ):
+                            cp_mgr = CheckpointManager(session)
+                            for stype, src in sources_to_clear:
+                                try:
+                                    await cp_mgr.clear_checkpoint(
+                                        current_project_id, stype, src
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        "Failed to clear checkpoint for source",
+                                        source_type=stype,
+                                        source=src,
+                                        error=str(e),
+                                    )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to clear checkpoints after successful run",
+                            error=str(e),
+                        )
+
+                if not force and processed_count == 0:
                     self.last_pipeline_result = aggregated_result
                     if aggregated_result.error_count > 0:
                         logger.error(
                             "No documents were successfully processed",
                             error_count=aggregated_result.error_count,
                         )
+                        raise PermanentJobError(
+                            self._format_indexing_failure_message(aggregated_result)
+                        )
                     else:
                         logger.info("No new or updated documents to process")
-                    return []
-
-                    # Deletion detection / reconciliation note:
-                    # Streaming classification only detects new/updated documents
-                    # per-batch. Full deletion detection (documents present in the
-                    # state DB but absent from the current snapshot across all
-                    # batches) requires a post-stream reconciliation (WS-3).
-                    # For now we only log that reconciliation is possible and
-                    # record the set of seen URIs; implementors can enable a
-                    # reconciliation pass that compares previous state URIs to
-                    # `seen_uris` and call `_process_deleted_documents`.
-                    if not force:
-                        logger.debug(
-                            "Post-stream reconciliation not enabled. Seen URIs collected for potential WS-3 reconciliation",
-                            seen_count=len(seen_uris),
-                        )
+                    return 0
 
                 self.last_pipeline_result = aggregated_result
+                if aggregated_result.error_count > 0:
+                    logger.error(
+                        f"Ingestion completed with failures: "
+                        f"{aggregated_result.success_count} succeeded, "
+                        f"{aggregated_result.error_count} failed",
+                        error_count=aggregated_result.error_count,
+                    )
+                    raise PermanentJobError(
+                        self._format_indexing_failure_message(aggregated_result)
+                    )
                 logger.info(
                     f"✅ Ingestion completed: {aggregated_result.success_count} chunks processed successfully"
                 )
-                return processed_documents
+                return processed_count
             finally:
                 if change_detector is not None:
                     await change_detector.__aexit__(None, None, None)
@@ -359,18 +589,29 @@ class PipelineOrchestrator:
             )
             raise
 
+    @staticmethod
+    def _format_indexing_failure_message(result: PipelineResult) -> str:
+        """Build an error message summarizing chunk-level indexing failures."""
+        error_summary = "; ".join(
+            sanitize_exception_message(error) for error in result.errors[:5]
+        )
+        return (
+            f"{result.error_count} chunk(s) failed to index into Qdrant "
+            f"(out of {result.success_count + result.error_count}): {error_summary}"
+        )
+
     async def _process_all_projects(
         self,
         source_type: str | None = None,
         source: str | None = None,
         force: bool = False,
         since: datetime | None = None,
-    ) -> list[Document]:
+    ) -> int:
         """Process documents from all configured projects."""
         if not self.project_manager:
             raise ValueError("Project manager not available")
 
-        all_documents = []
+        total_processed_count = 0
         aggregated_result = PipelineResult()
         failed_projects: list[str] = []
         project_ids = self.project_manager.list_project_ids()
@@ -388,22 +629,28 @@ class PipelineOrchestrator:
                     since=since,
                 )
                 project_result = self.last_pipeline_result
-                all_documents.extend(project_documents)
+                total_processed_count += project_documents
 
                 if project_result is not None:
                     aggregated_result.success_count += project_result.success_count
                     aggregated_result.error_count += project_result.error_count
-                    aggregated_result.successfully_processed_documents.update(
-                        project_result.successfully_processed_documents
+                    aggregated_result.processed_document_count += (
+                        project_result.processed_document_count
                     )
-                    aggregated_result.failed_document_ids.update(
-                        project_result.failed_document_ids
+                    aggregated_result.failed_document_count += (
+                        project_result.failed_document_count
+                    )
+                    aggregated_result.total_size_bytes += (
+                        project_result.total_size_bytes
                     )
                     aggregated_result.errors.extend(project_result.errors)
 
                 logger.debug(
-                    f"Processed {len(project_documents)} documents from project: {project_id}"
+                    f"Processed {project_documents} documents from project: {project_id}"
                 )
+            except PermanentJobError:
+                # PermanentJobError from process_documents should propagate
+                raise
             except ConnectorConfigurationError as e:
                 logger.error(
                     f"Configuration error in project {project_id}: "
@@ -458,61 +705,9 @@ class PipelineOrchestrator:
             )
         else:
             logger.info(
-                f"Completed processing all projects: {len(all_documents)} total documents"
+                f"Completed processing all projects: {total_processed_count} total documents"
             )
-        return all_documents
-
-    async def _collect_documents_from_sources(
-        self, filtered_config: SourcesConfig, project_id: str | None = None
-    ) -> list[Document]:
-        """Collect documents from all configured sources."""
-        documents = []
-
-        # Process each source type with project context
-        if filtered_config.confluence:
-            confluence_docs = (
-                await self.components.source_processor.process_source_type(
-                    filtered_config.confluence, get_connector_instance, "Confluence"
-                )
-            )
-            documents.extend(confluence_docs)
-
-        if filtered_config.git:
-            git_docs = await self.components.source_processor.process_source_type(
-                filtered_config.git, get_connector_instance, "Git"
-            )
-            documents.extend(git_docs)
-
-        if filtered_config.jira:
-            jira_docs = await self.components.source_processor.process_source_type(
-                filtered_config.jira, get_connector_instance, "Jira"
-            )
-            documents.extend(jira_docs)
-
-        if filtered_config.publicdocs:
-            publicdocs_docs = (
-                await self.components.source_processor.process_source_type(
-                    filtered_config.publicdocs, get_connector_instance, "PublicDocs"
-                )
-            )
-            documents.extend(publicdocs_docs)
-
-        if filtered_config.localfile:
-            localfile_docs = await self.components.source_processor.process_source_type(
-                filtered_config.localfile, get_connector_instance, "LocalFile"
-            )
-            documents.extend(localfile_docs)
-
-        # Inject project metadata into documents if project context is available
-        if project_id and self.project_manager:
-            for document in documents:
-                enhanced_metadata = self.project_manager.inject_project_metadata(
-                    project_id, document.metadata
-                )
-                document.metadata = enhanced_metadata
-
-        logger.info(f"📄 Collected {len(documents)} documents from all sources")
-        return documents
+        return total_processed_count
 
     async def _detect_document_changes(
         self,
@@ -603,6 +798,36 @@ class PipelineOrchestrator:
             )
             raise
 
+    async def _persist_single_document_state(
+        self,
+        document: Document,
+        project_id: str | None = None,
+    ) -> None:
+        """Persist one document's state as soon as it finishes, not at batch end.
+
+        Streaming batches are bounded at up to 256 documents and state was
+        previously only committed once the *entire* batch finished
+        chunking/embedding/upserting. If the process was interrupted partway
+        through such a batch, documents already durably upserted to Qdrant
+        had no ``DocumentStateRecord`` yet, so a resume would treat them as
+        new and reprocess them. Called from ``UpsertWorker`` the moment a
+        document's last chunk is accounted for, this closes that gap. The
+        end-of-batch ``_update_document_states`` call still runs afterwards
+        as a safety net (idempotent) for anything this callback missed.
+        """
+        try:
+            if not self.components.state_manager._initialized:
+                await self.components.state_manager.initialize()
+            await self.components.state_manager.update_document_states_batch(
+                [document], project_id
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to persist incremental document state for {document.id}: "
+                f"{sanitize_exception_message(e)}",
+                error_type=type(e).__name__,
+            )
+
     async def _update_document_states(
         self,
         documents: list[Document],
@@ -623,14 +848,20 @@ class PipelineOrchestrator:
             logger.debug("Initializing state manager for document state updates")
             await self.components.state_manager.initialize()
 
-        for doc in successfully_processed_docs:
-            try:
-                await self.components.state_manager.update_document_state(
-                    doc, project_id
-                )
+        if not successfully_processed_docs:
+            return
+
+        # One session/commit for the whole batch instead of one per document
+        # (each document's write is still isolated via a SAVEPOINT, so a
+        # single failure doesn't affect the others' results below).
+        results = await self.components.state_manager.update_document_states_batch(
+            successfully_processed_docs, project_id
+        )
+        for doc, _record, error in results:
+            if error is None:
                 logger.debug(f"Updated document state for {doc.id}")
-            except Exception as e:
+            else:
                 logger.error(
-                    f"Failed to update document state for {doc.id}: {sanitize_exception_message(e)}",
-                    error_type=type(e).__name__,
+                    f"Failed to update document state for {doc.id}: {sanitize_exception_message(error)}",
+                    error_type=type(error).__name__,
                 )

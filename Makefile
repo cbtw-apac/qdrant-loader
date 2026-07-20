@@ -12,8 +12,7 @@ install: ## Install both packages in development mode
 install-dev: ## Install both packages with development dependencies
 	uv sync --all-packages --all-extras
 
-test: ## Run all tests
-	uv run pytest packages/
+test: test-core test-loader test-mcp ## Run all tests
 
 test-loader: ## Run tests for qdrant-loader package only
 	uv run pytest packages/qdrant-loader/tests/
@@ -25,7 +24,9 @@ test-core: ## Run tests for qdrant-loader-core package only
 	uv run pytest packages/qdrant-loader-core/tests/
 
 test-coverage: ## Run tests with coverage report
-	uv run pytest packages/ --cov=packages --cov-report=html --cov-report=term-missing
+	cd packages/qdrant-loader-core && uv run pytest tests/ --cov=src --cov-report=html --cov-report=term-missing
+	cd packages/qdrant-loader && uv run pytest tests/ --cov=src --cov-report=html --cov-report=term-missing
+	cd packages/qdrant-loader-mcp-server && uv run pytest tests/ --cov=src --cov-report=html --cov-report=term-missing
 
 quality: ## Run quality gates (import cycles, module sizes) for qdrant-loader
 	cd packages/qdrant-loader && uv run pytest -q tests/unit/quality -v

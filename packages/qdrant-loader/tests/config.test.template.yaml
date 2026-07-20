@@ -4,6 +4,17 @@
 
 # Global configuration for all projects
 global:
+  # Graph configuration
+  graph:
+    enabled: true
+    backend: "falkordb"
+    connection:
+      host: "${GRAPH_HOST}"
+      port: "${GRAPH_PORT}"
+      password: "${GRAPH_PASSWORD}"
+    graph_name: "${GRAPH_NAME}"
+    pool:
+      max_connections: 20
   # Unified LLM configuration for tests (provider-agnostic)
   llm:
     provider: "openai"
@@ -27,9 +38,14 @@ global:
     chunk_overlap: 50
 
   embedding:
+    endpoint: "https://api.openai.com/v1" # Embedding service endpoint
     model: text-embedding-3-small
-    api_key: "${OPENAI_API_KEY}" # API key for the embedding service (required for OpenAI models)
+    api_key: "${LLM_API_KEY}" # API key for the embedding service
     batch_size: 10 # Smaller batch size for tests
+    vector_size: 1536 # Vector size for the embedding model
+    tokenizer: "cl100k_base" # Tokenizer for token counting
+    max_tokens_per_request: 8000 # Maximum total tokens per API request
+    max_tokens_per_chunk: 8000 # Maximum tokens per individual chunk
 
   semantic_analysis:
     num_topics: 3 # Number of topics to extract using LDA
@@ -48,6 +64,7 @@ global:
 
   # File conversion configuration for tests
   # Using smaller limits for faster test execution
+  # Using smaller limits for faster test execution
   file_conversion:
     # Maximum file size for conversion (in bytes) - 10MB for tests
     max_file_size: 10485760 # 10MB (smaller than production default)
@@ -59,12 +76,10 @@ global:
     markitdown:
       # Disable LLM integration for tests to avoid API calls
       enable_llm_descriptions: false
-      # LLM model for image descriptions (not used in tests)
+      # LLM model for image descriptions (when enabled)
       llm_model: "gpt-4o"
-      # LLM endpoint (not used in tests)
+      # LLM endpoint (when enabled)
       llm_endpoint: "https://api.openai.com/v1"
-      # API key for LLM service (not used in tests since LLM descriptions are disabled)
-      llm_api_key: "${OPENAI_API_KEY}"
 
 # Multi-project configuration
 projects:

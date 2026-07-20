@@ -1,7 +1,7 @@
 """Tests for PipelineOrchestrator module."""
 
 from typing import cast
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
 from qdrant_loader.config import Settings, SourcesConfig
@@ -10,11 +10,13 @@ from qdrant_loader.core.pipeline.document_pipeline import DocumentPipeline
 from qdrant_loader.core.pipeline.orchestrator import (
     PipelineComponents,
     PipelineOrchestrator,
+    _safe_document_size,
 )
 from qdrant_loader.core.pipeline.source_filter import SourceFilter
 from qdrant_loader.core.pipeline.source_processor import SourceProcessor
 from qdrant_loader.core.qdrant_manager import QdrantManager
 from qdrant_loader.core.state.state_manager import StateManager
+from qdrant_loader.core.worker.handlers import PermanentJobError
 
 
 def make_rich_compatible_mock(*args, **kwargs):
@@ -25,6 +27,30 @@ def make_rich_compatible_mock(*args, **kwargs):
     mock.__rich_console__ = lambda console, options: iter([])
     mock.__rich__ = lambda: ""
     return mock
+
+
+class TestSafeDocumentSize:
+    """Test the _safe_document_size helper used for total_size_bytes aggregation."""
+
+    def test_returns_int_size_from_metadata(self):
+        doc = Mock(spec=Document, metadata={"size": 100})
+        assert _safe_document_size(doc) == 100
+
+    def test_returns_size_from_numeric_string(self):
+        doc = Mock(spec=Document, metadata={"size": "250"})
+        assert _safe_document_size(doc) == 250
+
+    def test_returns_zero_for_invalid_string(self):
+        doc = Mock(spec=Document, metadata={"size": "invalid"})
+        assert _safe_document_size(doc) == 0
+
+    def test_returns_zero_for_missing_size(self):
+        doc = Mock(spec=Document, metadata={})
+        assert _safe_document_size(doc) == 0
+
+    def test_returns_zero_for_missing_metadata(self):
+        doc = Mock(spec=Document, id="doc1")
+        assert _safe_document_size(doc) == 0
 
 
 class TestPipelineComponents:
@@ -115,7 +141,15 @@ class TestPipelineOrchestrator:
         self.source_filter.filter_sources.return_value = filtered_config
         self.orchestrator._update_document_states = AsyncMock()
 
-        async def fake_stream_batches(filtered_config_arg, batch_size=256, since=None):
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
             assert filtered_config_arg is filtered_config
             yield mock_documents
 
@@ -139,17 +173,116 @@ class TestPipelineOrchestrator:
                 sources_config=self.mock_sources_config
             )
 
-        assert result == mock_documents
+        assert result == 2
         self.source_filter.filter_sources.assert_called_once_with(
             self.mock_sources_config, None, None
         )
-        self.document_pipeline.process_batch.assert_called_once_with(mock_documents)
+        self.document_pipeline.process_batch.assert_called_once_with(
+            mock_documents, None, on_document_complete=ANY
+        )
         self.orchestrator._update_document_states.assert_called_once_with(
             mock_documents, {"doc1", "doc2"}, None
         )
         mock_change_detector.classify_batch.assert_called_once_with(
             mock_documents, filtered_config, None
         )
+
+    @pytest.mark.asyncio
+    async def test_process_documents_persists_document_state_incrementally(self):
+        """Document state must be persisted as each document finishes inside
+        process_batch, not only once the whole streaming batch returns.
+
+        Regresses the resume bug where an interruption mid-batch (e.g. after
+        only some of ~20 documents in a single sub-256 batch had been
+        embedded/upserted) left no DocumentStateRecord for any of them, so a
+        restart reprocessed documents that had already succeeded. This test
+        drives process_batch's on_document_complete callback *before*
+        process_batch returns, and asserts the state manager was already
+        written to at that point.
+        """
+        mock_documents = cast(
+            list[Document],
+            [
+                Mock(spec=Document, id="doc1", content="content1"),
+                Mock(spec=Document, id="doc2", content="content2"),
+            ],
+        )
+
+        filtered_config = Mock(spec=SourcesConfig)
+        filtered_config.git = ["git_source"]
+        filtered_config.confluence = None
+        filtered_config.jira = None
+        filtered_config.publicdocs = None
+        filtered_config.localfile = None
+
+        self.source_filter.filter_sources.return_value = filtered_config
+
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
+            yield mock_documents
+
+        self.orchestrator._stream_batches_from_sources = fake_stream_batches
+
+        mock_change_detector = AsyncMock()
+        mock_change_detector.classify_batch.return_value = mock_documents
+        state_detector_context = Mock()
+        state_detector_context.__aenter__ = AsyncMock(return_value=mock_change_detector)
+        state_detector_context.__aexit__ = AsyncMock(return_value=None)
+
+        # Snapshot how many documents were already persisted *during* the
+        # process_batch call, before it returns to the orchestrator — this is
+        # exactly the moment an interruption would otherwise lose all state.
+        persisted_count_mid_batch = None
+
+        async def fake_process_batch(batch, project_id, on_document_complete=None):
+            nonlocal persisted_count_mid_batch
+            # Simulate documents completing one at a time *during* the batch,
+            # mirroring UpsertWorker notifying as each document's chunks land.
+            for doc in batch:
+                await on_document_complete(doc, True)
+            persisted_count_mid_batch = (
+                self.state_manager.update_document_states_batch.call_count
+            )
+            mock_result = Mock()
+            mock_result.successfully_processed_documents = {"doc1", "doc2"}
+            mock_result.success_count = 2
+            mock_result.failure_count = 0
+            mock_result.errors = []
+            mock_result.failed_document_ids = set()
+            return mock_result
+
+        self.document_pipeline.process_batch.side_effect = fake_process_batch
+
+        with patch(
+            "qdrant_loader.core.pipeline.orchestrator.StateChangeDetector",
+            return_value=state_detector_context,
+        ):
+            result = await self.orchestrator.process_documents(
+                sources_config=self.mock_sources_config
+            )
+
+        assert result == 2
+        # Both documents were already persisted before process_batch returned
+        # — i.e. incrementally, one single-document write per document.
+        assert persisted_count_mid_batch == 2
+        single_doc_calls = [
+            call
+            for call in self.state_manager.update_document_states_batch.call_args_list
+            if len(call.args[0]) == 1
+        ]
+        assert len(single_doc_calls) == 2
+        persisted_doc_ids = {call.args[0][0].id for call in single_doc_calls}
+        assert persisted_doc_ids == {"doc1", "doc2"}
+        # The end-of-batch call (_update_document_states) still runs afterward
+        # as a safety net, writing both documents together one more time.
+        assert self.state_manager.update_document_states_batch.call_count == 3
 
     @pytest.mark.asyncio
     async def test_process_documents_with_custom_sources_config(self):
@@ -161,7 +294,15 @@ class TestPipelineOrchestrator:
         self.source_filter.filter_sources.return_value = filtered_config
         self.orchestrator._update_document_states = AsyncMock()
 
-        async def fake_stream_batches(filtered_config_arg, batch_size=256, since=None):
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
             assert filtered_config_arg is filtered_config
             yield mock_documents
 
@@ -188,7 +329,7 @@ class TestPipelineOrchestrator:
                 sources_config=custom_sources_config
             )
 
-        assert result == mock_documents
+        assert result == 1
         self.source_filter.filter_sources.assert_called_once_with(
             custom_sources_config, None, None
         )
@@ -208,7 +349,15 @@ class TestPipelineOrchestrator:
         self.source_filter.filter_sources.return_value = filtered_config
         self.orchestrator._update_document_states = AsyncMock()
 
-        async def fake_stream_batches(filtered_config_arg, batch_size=256, since=None):
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
             assert filtered_config_arg is filtered_config
             yield mock_documents
 
@@ -237,17 +386,178 @@ class TestPipelineOrchestrator:
                 source="my-repo",
             )
 
-        assert result == mock_documents
+        assert result == 1
         self.source_filter.filter_sources.assert_called_once_with(
             self.mock_sources_config, "git", "my-repo"
         )
-        self.document_pipeline.process_batch.assert_called_once_with(mock_documents)
+        self.document_pipeline.process_batch.assert_called_once_with(
+            mock_documents, None, on_document_complete=ANY
+        )
         self.orchestrator._update_document_states.assert_called_once_with(
             mock_documents, {"doc1"}, None
         )
         mock_change_detector.classify_batch.assert_called_once_with(
             mock_documents, filtered_config, None
         )
+
+    @pytest.mark.asyncio
+    async def test_process_documents_raises_when_indexing_fails(self):
+        """A batch with indexing (upsert) failures must fail the whole job, not report success."""
+        mock_documents = cast(
+            list[Document],
+            [
+                Mock(spec=Document, id="doc1", content="content1"),
+                Mock(spec=Document, id="doc2", content="content2"),
+            ],
+        )
+
+        filtered_config = Mock(spec=SourcesConfig)
+        filtered_config.git = ["git_source"]
+        filtered_config.confluence = None
+        filtered_config.jira = None
+        filtered_config.publicdocs = None
+        filtered_config.localfile = None
+
+        self.source_filter.filter_sources.return_value = filtered_config
+        self.orchestrator._update_document_states = AsyncMock()
+
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
+            assert filtered_config_arg is filtered_config
+            yield mock_documents
+
+        self.orchestrator._stream_batches_from_sources = fake_stream_batches
+
+        mock_change_detector = AsyncMock()
+        mock_change_detector.classify_batch.return_value = mock_documents
+        state_detector_context = Mock()
+        state_detector_context.__aenter__ = AsyncMock(return_value=mock_change_detector)
+        state_detector_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch(
+            "qdrant_loader.core.pipeline.orchestrator.StateChangeDetector",
+            return_value=state_detector_context,
+        ):
+            mock_result = Mock()
+            mock_result.successfully_processed_documents = {"doc1"}
+            mock_result.success_count = 1
+            mock_result.failure_count = 1
+            mock_result.errors = ["Upsert failed for chunk doc2: connection refused"]
+            mock_result.failed_document_ids = {"doc2"}
+            self.document_pipeline.process_batch.return_value = mock_result
+
+            with pytest.raises(PermanentJobError, match="failed to index into Qdrant"):
+                await self.orchestrator.process_documents(
+                    sources_config=self.mock_sources_config
+                )
+
+        assert self.orchestrator.last_pipeline_result.error_count == 1
+        assert self.orchestrator.last_pipeline_result.success_count == 1
+
+    @pytest.mark.asyncio
+    async def test_process_documents_raises_when_all_documents_fail_to_index(self):
+        """If every document in the run fails to index, the job must still fail (not return [])."""
+        mock_documents = [Mock(spec=Document, id="doc1", content="content1")]
+        filtered_config = Mock(spec=SourcesConfig)
+        filtered_config.git = ["git_source"]
+        filtered_config.confluence = None
+        filtered_config.jira = None
+        filtered_config.publicdocs = None
+        filtered_config.localfile = None
+
+        self.source_filter.filter_sources.return_value = filtered_config
+
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
+            assert filtered_config_arg is filtered_config
+            yield mock_documents
+
+        self.orchestrator._stream_batches_from_sources = fake_stream_batches
+
+        mock_change_detector = AsyncMock()
+        mock_change_detector.classify_batch.return_value = mock_documents
+        state_detector_context = Mock()
+        state_detector_context.__aenter__ = AsyncMock(return_value=mock_change_detector)
+        state_detector_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch(
+            "qdrant_loader.core.pipeline.orchestrator.StateChangeDetector",
+            return_value=state_detector_context,
+        ):
+            mock_result = Mock()
+            mock_result.successfully_processed_documents = set()
+            mock_result.success_count = 0
+            mock_result.failure_count = 1
+            mock_result.errors = ["Upsert failed for chunk doc1: connection refused"]
+            mock_result.failed_document_ids = {"doc1"}
+            self.document_pipeline.process_batch.return_value = mock_result
+
+            with pytest.raises(PermanentJobError, match="failed to index into Qdrant"):
+                await self.orchestrator.process_documents(
+                    sources_config=self.mock_sources_config
+                )
+
+        assert self.orchestrator.last_pipeline_result.error_count == 1
+        assert self.orchestrator.last_pipeline_result.success_count == 0
+
+    @pytest.mark.asyncio
+    async def test_process_documents_raises_when_qdrant_collection_unavailable_even_if_no_changes(
+        self,
+    ):
+        """A no-change run must still fail when Qdrant collection is unavailable."""
+        mock_documents = cast(
+            list[Document],
+            [
+                Mock(spec=Document, id="doc1", content="content1"),
+                Mock(spec=Document, id="doc2", content="content2"),
+            ],
+        )
+
+        filtered_config = Mock(spec=SourcesConfig)
+        filtered_config.git = ["git_source"]
+        filtered_config.confluence = None
+        filtered_config.jira = None
+        filtered_config.publicdocs = None
+        filtered_config.localfile = None
+
+        self.source_filter.filter_sources.return_value = filtered_config
+        self.qdrant_manager.assert_collection_accessible.side_effect = Exception(
+            "Unexpected Response: 404 (Not Found): Collection does not exist"
+        )
+
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+        ):
+            assert filtered_config_arg is filtered_config
+            yield mock_documents
+
+        self.orchestrator._stream_batches_from_sources = fake_stream_batches
+
+        with pytest.raises(PermanentJobError, match="Qdrant collection is unavailable"):
+            await self.orchestrator.process_documents(
+                sources_config=self.mock_sources_config
+            )
+
+        self.document_pipeline.process_batch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_process_documents_no_sources_found(self):
@@ -282,7 +592,15 @@ class TestPipelineOrchestrator:
 
         self.source_filter.filter_sources.return_value = filtered_config
 
-        async def fake_stream_batches(filtered_config_arg, batch_size=256, since=None):
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
             if False:
                 yield []
 
@@ -301,7 +619,7 @@ class TestPipelineOrchestrator:
                 sources_config=self.mock_sources_config
             )
 
-        assert result == []
+        assert result == 0
 
     @pytest.mark.asyncio
     async def test_process_documents_no_changes_detected(self):
@@ -312,7 +630,15 @@ class TestPipelineOrchestrator:
         self.source_filter.filter_sources.return_value = filtered_config
         self.orchestrator._update_document_states = AsyncMock()
 
-        async def fake_stream_batches(filtered_config_arg, batch_size=256, since=None):
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
             assert filtered_config_arg is filtered_config
             yield mock_documents
 
@@ -332,10 +658,87 @@ class TestPipelineOrchestrator:
                 sources_config=self.mock_sources_config
             )
 
-        assert result == []
+        assert result == 0
         mock_change_detector.classify_batch.assert_called_once_with(
             mock_documents, filtered_config, None
         )
+
+    @pytest.mark.asyncio
+    async def test_process_documents_clears_checkpoint_for_streamed_source_when_batch_is_filtered_out(
+        self,
+    ):
+        """A clean run should clear stale checkpoints even when all documents were filtered out."""
+        doc = Mock(spec=Document, id="doc1", source_type="jira", source="jira-main")
+        doc.metadata = {
+            "__ingestion_checkpoint": {
+                "cursor_kind": "batch",
+                "cursor_value": "cursor-1",
+            }
+        }
+
+        filtered_config = Mock(spec=SourcesConfig)
+        filtered_config.git = None
+        filtered_config.confluence = None
+        filtered_config.jira = ["jira-main"]
+        filtered_config.publicdocs = None
+        filtered_config.localfile = None
+
+        project_manager = Mock()
+        project_manager.get_project_context.return_value = Mock(
+            config=Mock(sources=filtered_config)
+        )
+        self.orchestrator.project_manager = project_manager
+
+        self.source_filter.filter_sources.return_value = filtered_config
+        self.orchestrator._update_document_states = AsyncMock()
+        self.state_manager._initialized = True
+
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
+            assert filtered_config_arg is filtered_config
+            yield [doc]
+
+        self.orchestrator._stream_batches_from_sources = fake_stream_batches
+
+        mock_change_detector = AsyncMock()
+        mock_change_detector.classify_batch.return_value = []
+        state_detector_context = Mock()
+        state_detector_context.__aenter__ = AsyncMock(return_value=mock_change_detector)
+        state_detector_context.__aexit__ = AsyncMock(return_value=None)
+
+        session = object()
+        session_context = Mock()
+        session_context.__aenter__ = AsyncMock(return_value=session)
+        session_context.__aexit__ = AsyncMock(return_value=None)
+        self.state_manager.get_session = AsyncMock(return_value=session_context)
+
+        clear_checkpoint = AsyncMock()
+
+        with (
+            patch(
+                "qdrant_loader.core.pipeline.orchestrator.StateChangeDetector",
+                return_value=state_detector_context,
+            ),
+            patch(
+                "qdrant_loader.core.state.checkpoint_manager.CheckpointManager"
+            ) as checkpoint_manager_cls,
+        ):
+            checkpoint_manager_cls.return_value.clear_checkpoint = clear_checkpoint
+
+            result = await self.orchestrator.process_documents(
+                project_id="project-1",
+                resume=True,
+            )
+
+        assert result == 0
+        clear_checkpoint.assert_awaited_once_with("project-1", "jira", "jira-main")
 
     @pytest.mark.asyncio
     async def test_process_documents_exception_handling(self):
@@ -357,95 +760,6 @@ class TestPipelineOrchestrator:
                 await self.orchestrator.process_documents(
                     sources_config=self.mock_sources_config
                 )
-
-    @pytest.mark.asyncio
-    async def test_collect_documents_from_sources_all_types(self):
-        """Test collecting documents from all source types."""
-        # Setup filtered config with all source types
-        filtered_config = Mock(spec=SourcesConfig)
-        filtered_config.confluence = ["confluence_source"]
-        filtered_config.git = ["git_source"]
-        filtered_config.jira = ["jira_source"]
-        filtered_config.publicdocs = ["publicdocs_source"]
-        filtered_config.localfile = ["localfile_source"]
-
-        # Setup mock documents for each source type
-        confluence_docs = [Mock(spec=Document, id="confluence_doc")]
-        git_docs = [Mock(spec=Document, id="git_doc")]
-        jira_docs = [Mock(spec=Document, id="jira_doc")]
-        publicdocs_docs = [Mock(spec=Document, id="publicdocs_doc")]
-        localfile_docs = [Mock(spec=Document, id="localfile_doc")]
-
-        # Configure source processor mock
-        self.source_processor.process_source_type.side_effect = [
-            confluence_docs,
-            git_docs,
-            jira_docs,
-            publicdocs_docs,
-            localfile_docs,
-        ]
-
-        # Execute
-        result = await self.orchestrator._collect_documents_from_sources(
-            filtered_config, None
-        )
-
-        # Verify
-        expected_docs = (
-            confluence_docs + git_docs + jira_docs + publicdocs_docs + localfile_docs
-        )
-        assert result == expected_docs
-        assert self.source_processor.process_source_type.call_count == 5
-
-    @pytest.mark.asyncio
-    async def test_collect_documents_from_sources_selective(self):
-        """Test collecting documents from selective source types."""
-        # Setup filtered config with only git and confluence
-        filtered_config = Mock(spec=SourcesConfig)
-        filtered_config.confluence = ["confluence_source"]
-        filtered_config.git = ["git_source"]
-        filtered_config.jira = None
-        filtered_config.publicdocs = None
-        filtered_config.localfile = None
-
-        # Setup mock documents
-        confluence_docs = [Mock(spec=Document, id="confluence_doc")]
-        git_docs = [Mock(spec=Document, id="git_doc")]
-
-        self.source_processor.process_source_type.side_effect = [
-            confluence_docs,
-            git_docs,
-        ]
-
-        # Execute
-        result = await self.orchestrator._collect_documents_from_sources(
-            filtered_config, None
-        )
-
-        # Verify
-        expected_docs = confluence_docs + git_docs
-        assert result == expected_docs
-        assert self.source_processor.process_source_type.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_collect_documents_from_sources_empty(self):
-        """Test collecting documents when no sources are configured."""
-        # Setup filtered config with no sources
-        filtered_config = Mock(spec=SourcesConfig)
-        filtered_config.confluence = None
-        filtered_config.git = None
-        filtered_config.jira = None
-        filtered_config.publicdocs = None
-        filtered_config.localfile = None
-
-        # Execute
-        result = await self.orchestrator._collect_documents_from_sources(
-            filtered_config, None
-        )
-
-        # Verify
-        assert result == []
-        self.source_processor.process_source_type.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_detect_document_changes_success(self):
@@ -628,6 +942,9 @@ class TestPipelineOrchestrator:
 
         # Setup state manager
         self.state_manager._initialized = False
+        self.state_manager.update_document_states_batch.side_effect = (
+            lambda docs, project_id: [(doc, Mock(), None) for doc in docs]
+        )
 
         # Execute
         await self.orchestrator._update_document_states(
@@ -636,12 +953,9 @@ class TestPipelineOrchestrator:
 
         # Verify
         self.state_manager.initialize.assert_called_once()
-        # Should update states for doc1 and doc3 only
-        assert self.state_manager.update_document_state.call_count == 2
-        updated_docs = [
-            call.args[0]
-            for call in self.state_manager.update_document_state.call_args_list
-        ]
+        # Should update states for doc1 and doc3 only, in a single batch call
+        self.state_manager.update_document_states_batch.assert_called_once()
+        updated_docs = self.state_manager.update_document_states_batch.call_args.args[0]
         updated_doc_ids = {doc.id for doc in updated_docs}
         assert updated_doc_ids == {"doc1", "doc3"}
 
@@ -653,14 +967,17 @@ class TestPipelineOrchestrator:
 
         # Setup state manager as already initialized
         self.state_manager._initialized = True
+        self.state_manager.update_document_states_batch.side_effect = (
+            lambda docs, project_id: [(doc, Mock(), None) for doc in docs]
+        )
 
         # Execute
         await self.orchestrator._update_document_states(mock_documents, successfully_processed_doc_ids, None)  # type: ignore
 
         # Verify
         self.state_manager.initialize.assert_not_called()
-        self.state_manager.update_document_state.assert_called_once_with(
-            mock_documents[0], None
+        self.state_manager.update_document_states_batch.assert_called_once_with(
+            mock_documents, None
         )
 
     @pytest.mark.asyncio
@@ -675,17 +992,19 @@ class TestPipelineOrchestrator:
         # Setup state manager
         self.state_manager._initialized = True
 
-        # Configure one update to fail
-        self.state_manager.update_document_state.side_effect = [
-            None,  # Success for doc1
-            Exception("Update failed for doc2"),  # Failure for doc2
+        # Configure one document's update to fail within the batch
+        self.state_manager.update_document_states_batch.return_value = [
+            (mock_documents[0], Mock(), None),  # Success for doc1
+            (mock_documents[1], None, Exception("Update failed for doc2")),
         ]
 
         # Execute (should not raise exception)
         await self.orchestrator._update_document_states(mock_documents, successfully_processed_doc_ids, None)  # type: ignore
 
-        # Verify both updates were attempted
-        assert self.state_manager.update_document_state.call_count == 2
+        # Verify both documents were included in the single batch call
+        self.state_manager.update_document_states_batch.assert_called_once_with(
+            mock_documents, None
+        )
 
     @pytest.mark.asyncio
     async def test_update_document_states_empty_success_set(self):
@@ -699,8 +1018,8 @@ class TestPipelineOrchestrator:
         # Execute
         await self.orchestrator._update_document_states(mock_documents, successfully_processed_doc_ids, None)  # type: ignore
 
-        # Verify no updates were attempted (but initialization was called)
-        self.state_manager.update_document_state.assert_not_called()
+        # Verify no batch update was attempted (but initialization was called)
+        self.state_manager.update_document_states_batch.assert_not_called()
         self.state_manager.initialize.assert_called_once()
 
     @pytest.mark.asyncio
@@ -712,23 +1031,22 @@ class TestPipelineOrchestrator:
             self.settings, self.components, project_manager=project_manager
         )
 
-        docs_by_project = {
-            "p1": [Mock(spec=Document, id="doc1")],
-            "p2": [Mock(spec=Document, id="doc2")],
-        }
+        counts_by_project = {"p1": 1, "p2": 1}
         results_by_project = {
             "p1": Mock(
                 success_count=3,
                 error_count=1,
-                successfully_processed_documents={"doc1"},
-                failed_document_ids={"doc1-failed"},
+                processed_document_count=1,
+                failed_document_count=1,
+                total_size_bytes=100,
                 errors=["p1-error"],
             ),
             "p2": Mock(
                 success_count=5,
                 error_count=2,
-                successfully_processed_documents={"doc2"},
-                failed_document_ids={"doc2-failed"},
+                processed_document_count=1,
+                failed_document_count=1,
+                total_size_bytes=200,
                 errors=["p2-error"],
             ),
         }
@@ -736,27 +1054,21 @@ class TestPipelineOrchestrator:
         async def mock_process_documents(**kwargs):
             project_id = kwargs["project_id"]
             orchestrator.last_pipeline_result = results_by_project[project_id]
-            return docs_by_project[project_id]
+            return counts_by_project[project_id]
 
         with patch.object(
             orchestrator, "process_documents", side_effect=mock_process_documents
         ):
-            documents = await orchestrator._process_all_projects()
+            total = await orchestrator._process_all_projects()
 
-        assert len(documents) == 2
-        assert {doc.id for doc in documents} == {"doc1", "doc2"}
+        assert total == 2
 
         assert orchestrator.last_pipeline_result is not None
         assert orchestrator.last_pipeline_result.success_count == 8
         assert orchestrator.last_pipeline_result.error_count == 3
-        assert orchestrator.last_pipeline_result.successfully_processed_documents == {
-            "doc1",
-            "doc2",
-        }
-        assert orchestrator.last_pipeline_result.failed_document_ids == {
-            "doc1-failed",
-            "doc2-failed",
-        }
+        assert orchestrator.last_pipeline_result.processed_document_count == 2
+        assert orchestrator.last_pipeline_result.failed_document_count == 2
+        assert orchestrator.last_pipeline_result.total_size_bytes == 300
         assert orchestrator.last_pipeline_result.errors == ["p1-error", "p2-error"]
 
     @pytest.mark.asyncio
@@ -768,16 +1080,14 @@ class TestPipelineOrchestrator:
             self.settings, self.components, project_manager=project_manager
         )
 
-        docs_by_project = {
-            "p1": [Mock(spec=Document, id="doc1")],
-            "p2": [],
-        }
+        counts_by_project = {"p1": 1, "p2": 0}
 
         result_p1 = Mock(
             success_count=2,
             error_count=0,
-            successfully_processed_documents={"doc1"},
-            failed_document_ids=set(),
+            processed_document_count=1,
+            failed_document_count=0,
+            total_size_bytes=50,
             errors=[],
         )
 
@@ -787,22 +1097,21 @@ class TestPipelineOrchestrator:
                 orchestrator.last_pipeline_result = result_p1
             else:
                 orchestrator.last_pipeline_result = None
-            return docs_by_project[project_id]
+            return counts_by_project[project_id]
 
         with patch.object(
             orchestrator, "process_documents", side_effect=mock_process_documents
         ):
-            documents = await orchestrator._process_all_projects()
+            total = await orchestrator._process_all_projects()
 
-        assert len(documents) == 1
-        assert documents[0].id == "doc1"
+        assert total == 1
 
         assert orchestrator.last_pipeline_result is not None
         assert orchestrator.last_pipeline_result.success_count == 2
         assert orchestrator.last_pipeline_result.error_count == 0
-        assert orchestrator.last_pipeline_result.successfully_processed_documents == {
-            "doc1"
-        }
+        assert orchestrator.last_pipeline_result.processed_document_count == 1
+        assert orchestrator.last_pipeline_result.failed_document_count == 0
+        assert orchestrator.last_pipeline_result.total_size_bytes == 50
 
     @pytest.mark.asyncio
     async def test_process_all_projects_continues_on_connector_configuration_error(
@@ -826,20 +1135,20 @@ class TestPipelineOrchestrator:
             orchestrator.last_pipeline_result = Mock(
                 success_count=1,
                 error_count=0,
-                successfully_processed_documents={"doc2"},
-                failed_document_ids=set(),
+                processed_document_count=1,
+                failed_document_count=0,
+                total_size_bytes=10,
                 errors=[],
             )
-            return [Mock(spec=Document, id="doc2")]
+            return 1
 
         with patch.object(
             orchestrator, "process_documents", side_effect=mock_process_documents
         ):
             with patch("qdrant_loader.core.pipeline.orchestrator.logger") as mock_log:
-                documents = await orchestrator._process_all_projects()
+                total = await orchestrator._process_all_projects()
 
-        assert len(documents) == 1
-        assert documents[0].id == "doc2"
+        assert total == 1
 
         assert orchestrator.last_pipeline_result is not None
         assert any(
@@ -864,8 +1173,9 @@ class TestPipelineOrchestrator:
         result_p1 = Mock(
             success_count=2,
             error_count=0,
-            successfully_processed_documents={"doc1"},
-            failed_document_ids=set(),
+            processed_document_count=1,
+            failed_document_count=0,
+            total_size_bytes=10,
             errors=[],
         )
 
@@ -873,17 +1183,16 @@ class TestPipelineOrchestrator:
             project_id = kwargs["project_id"]
             if project_id == "p1":
                 orchestrator.last_pipeline_result = result_p1
-                return [Mock(spec=Document, id="doc1")]
+                return 1
 
             raise RuntimeError("project-level failure")
 
         with patch.object(
             orchestrator, "process_documents", side_effect=mock_process_documents
         ):
-            documents = await orchestrator._process_all_projects()
+            total = await orchestrator._process_all_projects()
 
-        assert len(documents) == 1
-        assert documents[0].id == "doc1"
+        assert total == 1
 
         assert orchestrator.last_pipeline_result is not None
         assert orchestrator.last_pipeline_result.success_count == 2
@@ -909,7 +1218,15 @@ class TestPipelineOrchestrator:
         self.source_filter.filter_sources.return_value = filtered_config
         self.orchestrator._update_document_states = AsyncMock()
 
-        async def fake_stream_batches(filtered_config_arg, batch_size=256, since=None):
+        async def fake_stream_batches(
+            filtered_config_arg,
+            batch_size=256,
+            since=None,
+            project_id=None,
+            seen_uris=None,
+            resume=True,
+            force=False,
+        ):
             if False:
                 yield []
 
@@ -939,4 +1256,300 @@ class TestPipelineOrchestrator:
             if "EMPTY SNAPSHOT" in str(call)
         ]
         assert len(warning_calls) > 0, "Expected warning about empty snapshot"
-        assert result == []
+        assert result == 0
+
+
+class TestStreamBatchesCheckpointBehavior:
+    """Tests for checkpoint stripping / preservation in _stream_batches_from_sources."""
+
+    def _make_doc(self, doc_id: str, cursor_value: str | None = None) -> Mock:
+        """Return a mock Document with optional __ingestion_checkpoint."""
+        doc = Mock(spec=Document)
+        doc.id = doc_id
+        doc.source_type = "Jira"
+        doc.source = "jira-main"
+        doc.url = "https://example.com/doc"
+        meta: dict = {}
+        if cursor_value is not None:
+            meta["__ingestion_checkpoint"] = {
+                "cursor_kind": "page_token",
+                "cursor_value": cursor_value,
+            }
+        doc.metadata = meta
+        return doc
+
+    def _make_orchestrator(self) -> PipelineOrchestrator:
+        settings = Mock(spec=Settings)
+        source_processor = AsyncMock(spec=SourceProcessor)
+        source_filter = Mock(spec=SourceFilter)
+        state_manager = AsyncMock(spec=StateManager)
+        state_manager._initialized = True
+        qdrant_manager = AsyncMock(spec=QdrantManager)
+        components = PipelineComponents(
+            document_pipeline=AsyncMock(spec=DocumentPipeline),
+            source_processor=source_processor,
+            source_filter=source_filter,
+            state_manager=state_manager,
+            qdrant_manager=qdrant_manager,
+        )
+        return PipelineOrchestrator(settings, components)
+
+    def _install_stream(self, orchestrator: PipelineOrchestrator, docs: list):
+        """Replace stream_source_documents with an async generator that yields docs."""
+
+        async def fake_stream(
+            source_configs, connector_factory, source_type, since=None
+        ):
+            for doc in docs:
+                yield doc
+
+        orchestrator.components.source_processor.stream_source_documents = fake_stream
+
+    def _jira_filtered_config(self) -> Mock:
+        cfg = Mock(spec=SourcesConfig)
+        cfg.confluence = None
+        cfg.git = None
+        cfg.jira = {"jira-main": Mock()}
+        cfg.publicdocs = None
+        cfg.localfile = None
+        return cfg
+
+    @pytest.mark.asyncio
+    async def test_midpage_size_flush_strips_checkpoint(self):
+        """When a page produces >batch_size docs, mid-page size flushes must NOT carry
+        __ingestion_checkpoint so the orchestrator does not save a premature cursor."""
+        orchestrator = self._make_orchestrator()
+        batch_size = 4
+
+        # 6 docs all from the same page (same cursor "tok-2")
+        page1_docs = [self._make_doc(f"d{i}", "tok-2") for i in range(6)]
+        self._install_stream(orchestrator, page1_docs)
+
+        batches: list[list] = []
+        async for batch in orchestrator._stream_batches_from_sources(
+            self._jira_filtered_config(), batch_size=batch_size, since=None
+        ):
+            batches.append(list(batch))
+
+        # First batch (size-based flush mid-page) must have checkpoints stripped
+        assert len(batches) >= 1
+        first_batch = batches[0]
+        assert len(first_batch) == batch_size
+        for doc in first_batch:
+            assert "__ingestion_checkpoint" not in (
+                doc.metadata or {}
+            ), "Mid-page size flush must not carry __ingestion_checkpoint"
+
+    @pytest.mark.asyncio
+    async def test_page_boundary_flush_preserves_checkpoint(self):
+        """The batch yielded at a cursor boundary must preserve __ingestion_checkpoint
+        so the orchestrator can safely save the page cursor."""
+        orchestrator = self._make_orchestrator()
+        batch_size = 10
+
+        # Page 1: 3 docs with cursor "tok-2"; page 2: 2 docs with cursor "tok-3"
+        page1_docs = [self._make_doc(f"p1-{i}", "tok-2") for i in range(3)]
+        page2_docs = [self._make_doc(f"p2-{i}", "tok-3") for i in range(2)]
+        self._install_stream(orchestrator, page1_docs + page2_docs)
+
+        batches: list[list] = []
+        async for batch in orchestrator._stream_batches_from_sources(
+            self._jira_filtered_config(), batch_size=batch_size, since=None
+        ):
+            batches.append(list(batch))
+
+        # Batch 0: page-1 docs flushed at the page-2 boundary → checkpoint preserved
+        assert len(batches) >= 1
+        page1_batch = batches[0]
+        assert len(page1_batch) == 3
+        for doc in page1_batch:
+            assert (
+                doc.metadata.get("__ingestion_checkpoint") is not None
+            ), "Page-boundary flush must preserve __ingestion_checkpoint"
+
+    @pytest.mark.asyncio
+    async def test_midpage_overflow_warning_logged_once(self):
+        """A warning is emitted exactly once when a page overflows batch_size,
+        not once per additional size-based flush within the same page."""
+        orchestrator = self._make_orchestrator()
+        batch_size = 2
+
+        # 5 docs from the same page → 2 size-based flushes
+        page_docs = [self._make_doc(f"d{i}", "tok-2") for i in range(5)]
+        self._install_stream(orchestrator, page_docs)
+
+        with patch("qdrant_loader.core.pipeline.orchestrator.logger") as mock_logger:
+            async for _ in orchestrator._stream_batches_from_sources(
+                self._jira_filtered_config(), batch_size=batch_size, since=None
+            ):
+                pass
+
+        overflow_warnings = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if "exceeds batch_size" in str(c)
+        ]
+        assert (
+            len(overflow_warnings) == 1
+        ), "Warning should be emitted exactly once per overflowing page"
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_stripped_then_preserved_across_two_pages(self):
+        """Mid-page size flush strips checkpoints; the trailing page-boundary flush
+        for the same page preserves them.  The flag resets for each new page."""
+        orchestrator = self._make_orchestrator()
+        batch_size = 3
+
+        # Page 1: 5 docs → 1 size flush (strip, 3 docs) + page-boundary flush (preserve, 2 docs)
+        # Page 2: 4 docs → 1 size flush (strip, 3 docs) + trailing flush (1 doc, tok-3 preserved)
+        page1_docs = [self._make_doc(f"p1-{i}", "tok-2") for i in range(5)]
+        page2_docs = [self._make_doc(f"p2-{i}", "tok-3") for i in range(4)]
+        self._install_stream(orchestrator, page1_docs + page2_docs)
+
+        batches: list[list] = []
+        async for batch in orchestrator._stream_batches_from_sources(
+            self._jira_filtered_config(), batch_size=batch_size, since=None
+        ):
+            batches.append(list(batch))
+
+        # batch 0: page-1 first 3 docs (size flush) → checkpoints stripped
+        assert len(batches[0]) == 3
+        for doc in batches[0]:
+            assert "__ingestion_checkpoint" not in doc.metadata
+
+        # batch 1: page-1 remaining 2 docs (page-boundary flush) → checkpoint preserved
+        assert len(batches[1]) == 2
+        for doc in batches[1]:
+            assert doc.metadata.get("__ingestion_checkpoint") is not None
+
+
+class TestStreamBatchesForceDisablesCheckpointLookup:
+    """force=True must bypass any saved checkpoint, even when resume=True.
+
+    This is the BULK_INGEST contract (CLI --force, worker BULK_INGEST jobs):
+    a forced run reprocesses everything and must not silently resume mid-page
+    from a checkpoint saved by a prior (possibly interrupted) run.
+    """
+
+    def _make_orchestrator(self) -> PipelineOrchestrator:
+        settings = Mock(spec=Settings)
+        source_processor = AsyncMock(spec=SourceProcessor)
+        source_filter = Mock(spec=SourceFilter)
+        state_manager = AsyncMock(spec=StateManager)
+        state_manager._initialized = True
+        qdrant_manager = AsyncMock(spec=QdrantManager)
+        components = PipelineComponents(
+            document_pipeline=AsyncMock(spec=DocumentPipeline),
+            source_processor=source_processor,
+            source_filter=source_filter,
+            state_manager=state_manager,
+            qdrant_manager=qdrant_manager,
+        )
+        return PipelineOrchestrator(settings, components)
+
+    def _jira_filtered_config(self) -> Mock:
+        cfg = Mock(spec=SourcesConfig)
+        cfg.confluence = None
+        cfg.git = None
+        cfg.jira = {"jira-main": Mock(source="jira-main")}
+        cfg.publicdocs = None
+        cfg.localfile = None
+        return cfg
+
+    def _install_stream_that_calls_factory(self, orchestrator: PipelineOrchestrator):
+        """Replace stream_source_documents with a fake that actually invokes the
+        connector factory per source config, then yields a single document."""
+
+        async def fake_stream(
+            source_configs, connector_factory, source_type, since=None
+        ):
+            for src_config in source_configs.values():
+                await connector_factory(src_config)
+            doc = Mock(spec=Document)
+            doc.id = "d1"
+            doc.source_type = source_type
+            doc.source = "jira-main"
+            doc.url = "https://example.com/doc"
+            doc.metadata = {}
+            yield doc
+
+        orchestrator.components.source_processor.stream_source_documents = fake_stream
+
+    def _patch_saved_checkpoint(self, orchestrator: PipelineOrchestrator):
+        """Make the checkpoint DB lookup return a stale checkpoint if queried."""
+        session = object()
+        session_context = Mock()
+        session_context.__aenter__ = AsyncMock(return_value=session)
+        session_context.__aexit__ = AsyncMock(return_value=None)
+        orchestrator.components.state_manager.get_session = AsyncMock(
+            return_value=session_context
+        )
+
+        stale_checkpoint = Mock(cursor_value="stale-cursor")
+        get_checkpoint = AsyncMock(return_value=stale_checkpoint)
+        return get_checkpoint
+
+    @pytest.mark.asyncio
+    async def test_force_true_bypasses_saved_checkpoint(self):
+        orchestrator = self._make_orchestrator()
+        self._install_stream_that_calls_factory(orchestrator)
+        get_checkpoint = self._patch_saved_checkpoint(orchestrator)
+
+        with (
+            patch(
+                "qdrant_loader.core.state.checkpoint_manager.CheckpointManager"
+            ) as checkpoint_manager_cls,
+            patch(
+                "qdrant_loader.core.pipeline.orchestrator.get_connector_instance"
+            ) as get_connector_instance,
+        ):
+            checkpoint_manager_cls.return_value.get_checkpoint = get_checkpoint
+            get_connector_instance.return_value = Mock()
+
+            batches = [
+                batch
+                async for batch in orchestrator._stream_batches_from_sources(
+                    self._jira_filtered_config(),
+                    project_id="project-1",
+                    resume=True,
+                    force=True,
+                )
+            ]
+
+        assert len(batches) == 1
+        get_checkpoint.assert_not_awaited()
+        _, kwargs = get_connector_instance.call_args
+        assert kwargs["checkpoint_cursor"] is None
+
+    @pytest.mark.asyncio
+    async def test_resume_without_force_uses_saved_checkpoint(self):
+        """Sanity check: the normal (non-forced) resume path is unaffected."""
+        orchestrator = self._make_orchestrator()
+        self._install_stream_that_calls_factory(orchestrator)
+        get_checkpoint = self._patch_saved_checkpoint(orchestrator)
+
+        with (
+            patch(
+                "qdrant_loader.core.state.checkpoint_manager.CheckpointManager"
+            ) as checkpoint_manager_cls,
+            patch(
+                "qdrant_loader.core.pipeline.orchestrator.get_connector_instance"
+            ) as get_connector_instance,
+        ):
+            checkpoint_manager_cls.return_value.get_checkpoint = get_checkpoint
+            get_connector_instance.return_value = Mock()
+
+            batches = [
+                batch
+                async for batch in orchestrator._stream_batches_from_sources(
+                    self._jira_filtered_config(),
+                    project_id="project-1",
+                    resume=True,
+                    force=False,
+                )
+            ]
+
+        assert len(batches) == 1
+        get_checkpoint.assert_awaited_once_with("project-1", "Jira", "jira-main")
+        _, kwargs = get_connector_instance.call_args
+        assert kwargs["checkpoint_cursor"] == "stale-cursor"

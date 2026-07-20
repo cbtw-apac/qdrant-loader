@@ -17,6 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from ..utils.logging import LoggingConfig
 from ..utils.sensitive import sanitize_exception_message
 from .chunking import ChunkingConfig
+from .concurrency import ConcurrencyConfig
 
 # Import consolidated configs
 from .global_config import GlobalConfig, SemanticAnalysisConfig
@@ -65,6 +66,7 @@ def _get_connector_configs():
 
 __all__ = [
     "ChunkingConfig",
+    "ConcurrencyConfig",
     "ConfluenceSpaceConfig",
     "GitAuthConfig",
     "GitRepoConfig",
@@ -313,6 +315,14 @@ class Settings(BaseSettings):
             and self.global_config.state_management.database_path == "./state.db"
         ):
             self.global_config.state_management.database_path = state_db
+
+        # STATE_DB_URL → state_management.database_url
+        # when set, selects the backend by dialect (e.g., postgresql+asyncpg://user:pass@host:5432/dbname)
+        # and overrides database_path. Namespaced to avoid clashing with a generic
+        # DATABASE_URL that might be used for other purposes.
+        state_database_url = os.getenv("STATE_DB_URL")
+        if state_database_url and not self.global_config.state_management.database_url:
+            self.global_config.state_management.database_url = state_database_url
 
     @property
     def qdrant_url(self) -> str:

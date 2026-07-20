@@ -17,7 +17,7 @@ def _setup_qdrant_loader_core_stubs(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.syspath_prepend(str(core_src))
 
     pkg = types.ModuleType("qdrant_loader_core")
-    pkg.__path__ = []
+    pkg.__path__ = [str(core_src / "qdrant_loader_core")]
     monkeypatch.setitem(sys.modules, "qdrant_loader_core", pkg)
 
     config_mod = types.ModuleType("qdrant_loader_core.config")
@@ -38,6 +38,36 @@ def _setup_qdrant_loader_core_stubs(monkeypatch: pytest.MonkeyPatch):
     sparse_mod.get_sparse_encoder = _get_sparse_encoder
     monkeypatch.setitem(sys.modules, "qdrant_loader_core.sparse", sparse_mod)
 
+    graph_pkg = types.ModuleType("qdrant_loader_core.graph")
+    graph_pkg.__path__ = []
+    graph_pkg.get_graph_store = lambda *_args, **_kwargs: None
+    monkeypatch.setitem(sys.modules, "qdrant_loader_core.graph", graph_pkg)
+
+    graph_registry_mod = types.ModuleType("qdrant_loader_core.graph.registry")
+    monkeypatch.setitem(
+        sys.modules, "qdrant_loader_core.graph.registry", graph_registry_mod
+    )
+
+    graph_extractor_pkg = types.ModuleType("qdrant_loader_core.graph.extractor")
+    graph_extractor_pkg.__path__ = []
+    monkeypatch.setitem(
+        sys.modules, "qdrant_loader_core.graph.extractor", graph_extractor_pkg
+    )
+
+    base_extractor_mod = types.ModuleType(
+        "qdrant_loader_core.graph.extractor.base_extractor"
+    )
+
+    class _EntityExtractor:
+        pass
+
+    base_extractor_mod.EntityExtractor = _EntityExtractor
+    monkeypatch.setitem(
+        sys.modules,
+        "qdrant_loader_core.graph.extractor.base_extractor",
+        base_extractor_mod,
+    )
+
 
 @pytest.mark.asyncio
 async def test_incremental_pull_accepts_since_param(monkeypatch):
@@ -52,9 +82,14 @@ async def test_incremental_pull_accepts_since_param(monkeypatch):
 
     from qdrant_loader.core.pipeline.orchestrator import PipelineOrchestrator
 
+    components = MagicMock()
+    components.qdrant_manager.assert_collection_accessible = AsyncMock(
+        return_value=None
+    )
+
     orchestrator = PipelineOrchestrator(
         settings=MagicMock(),
-        components=MagicMock(),
+        components=components,
         project_manager=MagicMock(),
     )
     # Stub deep enough so orchestrator.process_documents reaches
@@ -67,6 +102,8 @@ async def test_incremental_pull_accepts_since_param(monkeypatch):
         since=None,
         project_id=None,
         seen_uris=None,
+        resume=True,
+        force=False,
     ):
         recorded_calls.append(
             {
@@ -75,6 +112,8 @@ async def test_incremental_pull_accepts_since_param(monkeypatch):
                 "since": since,
                 "project_id": project_id,
                 "seen_uris": seen_uris,
+                "resume": resume,
+                "force": force,
             }
         )
         if False:

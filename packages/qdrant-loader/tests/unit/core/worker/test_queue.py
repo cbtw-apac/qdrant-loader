@@ -20,8 +20,9 @@ async def sqlite_job_queue(tmp_path: Path):
     config = StateManagementConfig(database_path=str(db_path))
     engine, session_factory = initialize_engine_and_session(config)
     await create_tables(engine)
+    queue_lock = asyncio.Lock()
 
-    queue = SQLiteJobQueue(session_factory)
+    queue = SQLiteJobQueue(session_factory, db_op_lock=queue_lock)
     try:
         yield queue
     finally:
@@ -77,6 +78,35 @@ async def test_claim_next_no_duplicates_under_race(sqlite_job_queue: SQLiteJobQu
     assert len(done_jobs) == total_jobs
     assert len(pending_jobs) == 0
     assert len(running_jobs) == 0
+
+
+@pytest.mark.asyncio
+async def test_claim_next_no_duplicate_claims_across_queue_instances(
+    sqlite_job_queue: SQLiteJobQueue,
+):
+    # Simulate multiple independent workers/processes sharing the same DB.
+    # Each instance gets its own lock (as in production) to exercise
+    # cross-instance atomicity rather than trivially serialising via one lock.
+    queues = [sqlite_job_queue] + [
+        SQLiteJobQueue(
+            sqlite_job_queue._session_factory,
+            db_op_lock=asyncio.Lock(),
+        )
+        for _ in range(7)
+    ]
+
+    for i in range(50):
+        job = await sqlite_job_queue.enqueue(
+            "INCREMENTAL_PULL", {"source": f"docs-{i}"}
+        )
+        claims = await asyncio.gather(
+            *(queue.claim_next(lease_seconds=30) for queue in queues)
+        )
+
+        claimed = [claim for claim in claims if claim is not None]
+        assert len(claimed) == 1
+        assert claimed[0].id == job.id
+        assert claimed[0].attempts == 1
 
 
 @pytest.mark.asyncio
@@ -354,6 +384,35 @@ async def test_extend_visibility_on_pending_job_fails(
 
 
 @pytest.mark.asyncio
+async def test_extend_visibility_rejects_stale_claim_attempt(
+    sqlite_job_queue: SQLiteJobQueue,
+):
+    """A stale worker must not renew a lease after reclaim increments attempts."""
+    job = await sqlite_job_queue.enqueue("INCREMENTAL_PULL", {"source": "test"})
+
+    first_claim = await sqlite_job_queue.claim_next(lease_seconds=1)
+    assert first_claim is not None
+
+    await asyncio.sleep(1.1)
+
+    second_claim = await sqlite_job_queue.claim_next(lease_seconds=60)
+    assert second_claim is not None
+    assert second_claim.attempts == first_claim.attempts + 1
+
+    # First claimant is stale now and must not be able to renew.
+    stale_extended = await sqlite_job_queue.extend_visibility(
+        job.id, lease_seconds=30, claim_attempt=first_claim.attempts
+    )
+    assert stale_extended is False
+
+    # Current claimant can still renew.
+    current_extended = await sqlite_job_queue.extend_visibility(
+        job.id, lease_seconds=30, claim_attempt=second_claim.attempts
+    )
+    assert current_extended is True
+
+
+@pytest.mark.asyncio
 async def test_list_with_offset_and_limit_pagination(sqlite_job_queue: SQLiteJobQueue):
     """Test pagination using offset and limit parameters."""
     # Create 25 jobs
@@ -423,3 +482,68 @@ async def test_list_default_offset_is_zero(sqlite_job_queue: SQLiteJobQueue):
     # Call without offset parameter (should default to 0, return first 5)
     jobs = await sqlite_job_queue.list(limit=10)
     assert len(jobs) == 5
+
+
+@pytest.mark.asyncio
+async def test_mixed_enqueue_and_claim_does_not_raise_sqlite_commit_conflict(
+    sqlite_job_queue: SQLiteJobQueue,
+):
+    """Concurrent enqueue + claim/mark should remain stable on SQLite."""
+    total_jobs = 120
+    producer_done = asyncio.Event()
+    errors: list[Exception] = []
+
+    async def producer() -> None:
+        try:
+            for i in range(total_jobs):
+                await sqlite_job_queue.enqueue("INCREMENTAL_PULL", {"index": i})
+                if i % 10 == 0:
+                    await asyncio.sleep(0)
+        except Exception as exc:  # pragma: no cover - defensive capture
+            errors.append(exc)
+        finally:
+            producer_done.set()
+
+    async def consumer() -> None:
+        while True:
+            try:
+                job = await sqlite_job_queue.claim_next(lease_seconds=30)
+            except Exception as exc:  # pragma: no cover - defensive capture
+                errors.append(exc)
+                return
+
+            if job is None:
+                if producer_done.is_set():
+                    pending = await sqlite_job_queue.list(
+                        status=SQLiteJobQueue.PENDING, limit=1
+                    )
+                    running = await sqlite_job_queue.list(
+                        status=SQLiteJobQueue.RUNNING, limit=1
+                    )
+                    if not pending and not running:
+                        return
+                await asyncio.sleep(0)
+                continue
+
+            try:
+                await sqlite_job_queue.mark_done(job.id, claim_attempt=job.attempts)
+            except Exception as exc:  # pragma: no cover - defensive capture
+                errors.append(exc)
+                return
+
+    await asyncio.wait_for(
+        asyncio.gather(producer(), *(consumer() for _ in range(4))),
+        timeout=20,
+    )
+
+    assert errors == []
+
+    done_jobs = await sqlite_job_queue.list(status=SQLiteJobQueue.DONE, limit=1000)
+    pending_jobs = await sqlite_job_queue.list(status=SQLiteJobQueue.PENDING, limit=1)
+    running_jobs = await sqlite_job_queue.list(status=SQLiteJobQueue.RUNNING, limit=1)
+    failed_jobs = await sqlite_job_queue.list(status=SQLiteJobQueue.FAILED, limit=1)
+
+    assert len(done_jobs) == total_jobs
+    assert pending_jobs == []
+    assert running_jobs == []
+    assert failed_jobs == []

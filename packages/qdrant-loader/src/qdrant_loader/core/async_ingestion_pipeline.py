@@ -1,9 +1,9 @@
 """Refactored async ingestion pipeline using the new modular architecture."""
 
+import asyncio
 from pathlib import Path
 
 from qdrant_loader.config import Settings, SourcesConfig
-from qdrant_loader.core.document import Document
 from qdrant_loader.core.monitoring import prometheus_metrics
 from qdrant_loader.core.monitoring.ingestion_metrics import IngestionMonitor
 from qdrant_loader.core.project_manager import ProjectManager
@@ -34,10 +34,10 @@ class AsyncIngestionPipeline:
         settings: Settings,
         qdrant_manager: QdrantManager,
         state_manager: StateManager | None = None,
-        max_chunk_workers: int = 10,
-        max_embed_workers: int = 4,
-        max_upsert_workers: int = 4,
-        queue_size: int = 1000,
+        max_chunk_workers: int | None = None,
+        max_embed_workers: int | None = None,
+        max_upsert_workers: int | None = None,
+        queue_size: int | None = None,
         upsert_batch_size: int | None = None,
         enable_metrics: bool = False,
         metrics_dir: Path | None = None,  # New parameter for workspace support
@@ -49,11 +49,16 @@ class AsyncIngestionPipeline:
             qdrant_manager: QdrantManager instance
             state_manager: Optional state manager
 
-            max_chunk_workers: Maximum number of chunking workers
-            max_embed_workers: Maximum number of embedding workers
-            max_upsert_workers: Maximum number of upsert workers
-            queue_size: Queue size for workers
-            upsert_batch_size: Batch size for upserts
+            max_chunk_workers: Maximum number of chunking workers. Defaults to
+                ``settings.global_config.concurrency.max_chunk_workers``.
+            max_embed_workers: Maximum number of embedding workers. Defaults to
+                ``settings.global_config.concurrency.max_embed_workers``.
+            max_upsert_workers: Maximum number of upsert workers. Defaults to
+                ``settings.global_config.concurrency.max_upsert_workers``.
+            queue_size: Queue size for workers. Defaults to
+                ``settings.global_config.concurrency.queue_size``.
+            upsert_batch_size: Batch size for upserts. Defaults to
+                ``settings.global_config.concurrency.upsert_batch_size``.
             enable_metrics: Whether to enable metrics server
             metrics_dir: Custom metrics directory (for workspace support)
         """
@@ -66,13 +71,32 @@ class AsyncIngestionPipeline:
                 "Global configuration not available. Please check your configuration file."
             )
 
-        # Create pipeline configuration with worker and batch size settings.
+        # Explicit constructor args win; otherwise fall back to the user's
+        # settings.yaml (global.concurrency), so these knobs are actually
+        # reachable from configuration instead of being stuck at a literal.
+        concurrency = settings.global_config.concurrency
         self.pipeline_config = PipelineConfig(
-            max_chunk_workers=max_chunk_workers,
-            max_embed_workers=max_embed_workers,
-            max_upsert_workers=max_upsert_workers,
-            queue_size=queue_size,
-            upsert_batch_size=upsert_batch_size,
+            max_chunk_workers=(
+                max_chunk_workers
+                if max_chunk_workers is not None
+                else concurrency.max_chunk_workers
+            ),
+            max_embed_workers=(
+                max_embed_workers
+                if max_embed_workers is not None
+                else concurrency.max_embed_workers
+            ),
+            max_upsert_workers=(
+                max_upsert_workers
+                if max_upsert_workers is not None
+                else concurrency.max_upsert_workers
+            ),
+            queue_size=queue_size if queue_size is not None else concurrency.queue_size,
+            upsert_batch_size=(
+                upsert_batch_size
+                if upsert_batch_size is not None
+                else concurrency.upsert_batch_size
+            ),
             enable_metrics=enable_metrics,
         )
 
@@ -140,6 +164,12 @@ class AsyncIngestionPipeline:
         logger.debug("Starting pipeline initialization")
 
         try:
+            # Ensure the Qdrant collection and its payload indexes exist.
+            # create_collection() is idempotent: it returns early when the
+            # collection already exists, but now also ensures indexes are
+            # present on existing collections (required for filter-based deletes).
+            await asyncio.to_thread(self.qdrant_manager.create_collection)
+
             # Initialize state manager first
             if not self.state_manager.is_initialized:
                 logger.debug("Initializing state manager")
@@ -186,7 +216,8 @@ class AsyncIngestionPipeline:
         source: str | None = None,
         project_id: str | None = None,
         force: bool = False,
-    ) -> list[Document]:
+        resume: bool = True,
+    ) -> int:
         """Process documents from all configured sources.
 
         Args:
@@ -197,7 +228,7 @@ class AsyncIngestionPipeline:
             force: Force processing of all documents, bypassing change detection
 
         Returns:
-            List of processed documents
+            Number of documents successfully processed.
         """
         # Ensure the pipeline is initialized
         await self.initialize()
@@ -214,37 +245,33 @@ class AsyncIngestionPipeline:
             },
         )
 
-        documents = []  # Initialize to avoid UnboundLocalError in exception handler
+        processed_count = (
+            0  # Initialize to avoid UnboundLocalError in exception handler
+        )
         try:
             logger.debug("Starting document processing with new pipeline architecture")
 
             # Use the orchestrator to process documents with project support
-            documents = await self.orchestrator.process_documents(
+            processed_count = await self.orchestrator.process_documents(
                 sources_config=sources_config,
                 source_type=source_type,
                 source=source,
                 project_id=project_id,
                 force=force,
+                resume=resume,
             )
 
             # Update metrics
-            if documents:
+            if processed_count:
                 pipeline_result = getattr(
                     self.orchestrator, "last_pipeline_result", None
                 )
                 total_chunks = getattr(pipeline_result, "success_count", 0)
-
-                def _safe_document_size(doc: Document) -> int:
-                    try:
-                        return int(doc.metadata.get("size", 0))
-                    except (TypeError, ValueError):
-                        return 0
-
-                total_size_bytes = sum(_safe_document_size(doc) for doc in documents)
+                total_size_bytes = getattr(pipeline_result, "total_size_bytes", 0)
 
                 self.monitor.start_batch(
                     "document_batch",
-                    batch_size=len(documents),
+                    batch_size=processed_count,
                     metadata={
                         "source_type": source_type,
                         "source": source,
@@ -255,7 +282,7 @@ class AsyncIngestionPipeline:
                 # Note: Success/error counts are handled internally by the new architecture
                 self.monitor.end_batch(
                     "document_batch",
-                    len(documents),
+                    processed_count,
                     0,
                     [],
                     total_chunks=total_chunks,
@@ -265,9 +292,9 @@ class AsyncIngestionPipeline:
             self.monitor.end_operation("ingestion_process")
 
             logger.debug(
-                f"Document processing completed. Processed {len(documents)} documents"
+                f"Document processing completed. Processed {processed_count} documents"
             )
-            return documents
+            return processed_count
 
         except Exception as e:
             safe_error = sanitize_exception_message(e)
@@ -275,7 +302,7 @@ class AsyncIngestionPipeline:
                 "Document processing pipeline failed during ingestion",
                 error=safe_error,
                 error_type=type(e).__name__,
-                documents_attempted=len(documents),
+                documents_attempted=processed_count,
                 suggestion="Check data source connectivity, document formats, and system resources",
             )
             self.monitor.end_operation(
