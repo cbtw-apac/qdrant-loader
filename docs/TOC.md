@@ -21,7 +21,6 @@
 
 1. **Developer Docs**
    - Architecture (`docs/developers/architecture/`)
-   - Graph Module (`docs/developers/architecture/graph-module.md`)
    - Extending (`docs/developers/extending/`)
    - Testing (`docs/developers/testing/`)
    - Deployment (`docs/developers/deployment/`)
