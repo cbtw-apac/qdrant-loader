@@ -11,11 +11,12 @@ from fastapi.responses import JSONResponse
 
 from qdrant_loader.utils.logging import LoggingConfig
 from qdrant_loader.webhooks.auth import (
-    WEBHOOK_SECRET_ENV_VAR,
+    WEBHOOK_AUTH_NOT_CONFIGURED_MESSAGE,
     get_client_ip,
     verify_cognito_token,
     verify_ingest_auth,
     verify_webhook_token,
+    webhook_auth_configured,
 )
 from qdrant_loader.webhooks.handlers import (
     INGEST_SUPPORTED_SOURCE_TYPES,
@@ -55,23 +56,8 @@ _request_timestamps: dict[str, list[float]] = {}
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    has_global_secret = bool(os.getenv(WEBHOOK_SECRET_ENV_VAR)) or bool(
-        os.getenv("WEBHOOK_SECRETS")
-    )
-    has_project_secret = any(
-        key.startswith("WEBHOOK_SECRET_") and bool(value)
-        for key, value in os.environ.items()
-    )
-    cognito_enabled = os.getenv("WEBHOOK_ENABLE_COGNITO_JWT", "false").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
-    if not (has_global_secret or has_project_secret or cognito_enabled):
-        raise RuntimeError(
-            "Webhook authentication is not configured. Set WEBHOOK_SECRET, "
-            "WEBHOOK_SECRETS, WEBHOOK_SECRET_<PROJECT_ID>, or enable Cognito JWT."
-        )
+    if not webhook_auth_configured():
+        raise RuntimeError(WEBHOOK_AUTH_NOT_CONFIGURED_MESSAGE)
 
     await QueueBackendManager.initialize()
     stop_event = asyncio.Event()
