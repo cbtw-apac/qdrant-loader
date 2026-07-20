@@ -66,7 +66,7 @@ def test_webhook_project_route_enqueues_single_event(mock_queue_backend, monkeyp
 
     with TestClient(app) as client:
         response = client.post(
-            "/webhooks/projects/project1/jira/my-jira-source?token=secret",
+            "/webhooks/projects/project1/jira/my-jira-source?secret=secret",
             json={
                 "webhookEvent": "jira:issue_updated",
                 "issue": {"key": "TEST-1", "id": "10001"},
@@ -87,7 +87,7 @@ def test_webhook_source_route_enqueues_event(mock_queue_backend, monkeypatch):
 
     with TestClient(app) as client:
         response = client.post(
-            "/webhooks/jira/my-jira-source?token=secret",
+            "/webhooks/jira/my-jira-source?secret=secret",
             json={
                 "webhookEvent": "jira:issue_deleted",
                 "issue": {"key": "TEST-2", "id": "10002"},
@@ -105,7 +105,7 @@ def test_webhook_requires_auth(monkeypatch):
 
     with TestClient(app) as client:
         response = client.post(
-            "/webhooks/jira/my-jira-source?token=wrong-secret",
+            "/webhooks/jira/my-jira-source?secret=wrong-secret",
             json={},
         )
 
@@ -118,7 +118,7 @@ def test_webhook_rejects_non_jira_source(mock_queue_backend, monkeypatch):
 
     with TestClient(app) as client:
         response = client.post(
-            "/webhooks/confluence/my-source?token=secret",
+            "/webhooks/confluence/my-source?secret=secret",
             json={},
         )
 
@@ -131,7 +131,7 @@ def test_ingest_route_enqueues_full_scan(mock_queue_backend, monkeypatch):
 
     with TestClient(app) as client:
         response = client.post(
-            "/ingest?project_id=project1&source_type=jira&source=my-source&force=true&token=secret",
+            "/ingest?project_id=project1&source_type=jira&source=my-source&force=true&secret=secret",
         )
 
     assert response.status_code == 202
@@ -166,7 +166,7 @@ def test_ingest_route_rejects_missing_source_type(mock_queue_backend, monkeypatc
 
     with TestClient(app) as client:
         response = client.post(
-            "/ingest?project_id=test-project&source=my-source&token=secret",
+            "/ingest?project_id=test-project&source=my-source&secret=secret",
         )
 
     assert response.status_code == 422
