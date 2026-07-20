@@ -5,6 +5,7 @@ from qdrant_loader.config.chunking import (
     ChunkingConfig,
     CodeStrategyConfig,
     DefaultStrategyConfig,
+    DoclingStrategyConfig,
     HtmlStrategyConfig,
     JsonStrategyConfig,
     MarkdownStrategyConfig,
@@ -222,6 +223,41 @@ class TestMarkdownStrategyConfig:
             MarkdownStrategyConfig(estimation_buffer=-0.1)
 
 
+class TestDoclingStrategyConfig:
+    """Test the DoclingStrategyConfig class (YAML surface for docling chunking)."""
+
+    def test_default_values(self):
+        """Unset by default: no max_tokens override, context-in-embed off."""
+        config = DoclingStrategyConfig()
+        assert config.max_tokens is None
+        assert config.include_context_in_embed is False
+
+    def test_custom_values(self):
+        """Both knobs can be set explicitly."""
+        config = DoclingStrategyConfig(max_tokens=1024, include_context_in_embed=True)
+        assert config.max_tokens == 1024
+        assert config.include_context_in_embed is True
+
+    def test_max_tokens_must_be_positive(self):
+        """max_tokens is a token budget — zero or negative is meaningless."""
+        with pytest.raises(ValueError, match="greater than 0"):
+            DoclingStrategyConfig(max_tokens=0)
+
+        with pytest.raises(ValueError, match="greater than 0"):
+            DoclingStrategyConfig(max_tokens=-10)
+
+    def test_table_serialization_accepts_known_modes_only(self):
+        """Tables in chunk text: 'triplets' (default) or 'markdown' — nothing else."""
+        assert DoclingStrategyConfig().table_serialization == "triplets"
+        assert (
+            DoclingStrategyConfig(table_serialization="markdown").table_serialization
+            == "markdown"
+        )
+
+        with pytest.raises(ValueError, match=r"should be 'triplets' or 'markdown'"):
+            DoclingStrategyConfig(table_serialization="csv")
+
+
 class TestStrategySpecificConfig:
     """Test the StrategySpecificConfig class."""
 
@@ -235,6 +271,7 @@ class TestStrategySpecificConfig:
         assert isinstance(config.code, CodeStrategyConfig)
         assert isinstance(config.json_strategy, JsonStrategyConfig)
         assert isinstance(config.markdown, MarkdownStrategyConfig)
+        assert isinstance(config.docling, DoclingStrategyConfig)
 
     def test_json_alias(self):
         """Test that json alias works for json_strategy."""

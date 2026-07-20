@@ -201,6 +201,27 @@ class TestWebsiteBuilderMarkdown:
         assert 'class="h3 fw-bold text-primary"' in result
         assert 'class="h4 fw-bold"' in result
 
+    def test_add_bootstrap_classes_numbered_step_paragraphs(self):
+        """Regression: numbered step paragraphs should keep list-group styling."""
+        builder = WebsiteBuilder()
+
+        html = (
+            "<p>1. <strong>Fork and Clone</strong></p>"
+            '<div class="code-block-wrapper"><pre class="code-block"><code>cmd</code></pre></div>'
+            "<p>2. <strong>Install Dependencies</strong></p>"
+        )
+        result = builder.add_bootstrap_classes(html)
+
+        assert '<ol start="1" class="list-group list-group-numbered">' in result
+        assert '<ol start="2" class="list-group list-group-numbered">' in result
+        assert (
+            '<li class="list-group-item"><strong>Fork and Clone</strong></li>' in result
+        )
+        assert (
+            '<li class="list-group-item"><strong>Install Dependencies</strong></li>'
+            in result
+        )
+
     def test_markdown_to_html_with_markdown_library(self):
         """Test markdown conversion with markdown library available."""
         builder = WebsiteBuilder()
@@ -552,23 +573,23 @@ class TestWebsiteBuilderLicenseHandling:
 
         # Create a LICENSE file
         license_file = mock_project_structure / "LICENSE"
-        license_content = """GNU GENERAL PUBLIC LICENSE
-Version 3, 29 June 2007
+        license_content = """Apache License
+    Version 2.0, January 2004
 
-Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
-Everyone is permitted to copy and distribute verbatim copies
-of this license document, but changing it is not allowed."""
+    http://www.apache.org/licenses/
+
+    TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION"""
         license_file.write_text(license_content)
 
         builder.build_license_page(
-            "LICENSE", "LICENSE.html", "License", "GNU GPLv3 License"
+            "LICENSE", "LICENSE.html", "License", "Apache License 2.0"
         )
 
         output_file = mock_project_structure / "site" / "LICENSE.html"
         assert output_file.exists()
 
         content = output_file.read_text()
-        assert "GNU GENERAL PUBLIC LICENSE" in content
+        assert "Apache License" in content
         assert "License Information" in content
 
     def test_build_license_page_missing_file(

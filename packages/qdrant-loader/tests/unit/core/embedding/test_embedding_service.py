@@ -25,6 +25,7 @@ def mock_settings():
     embedding_config.vector_size = 1536
     embedding_config.max_tokens_per_request = 8000
     embedding_config.max_tokens_per_chunk = 8000
+    embedding_config.min_request_interval = 0.5
     embedding_config.api_key = "test-key"
 
     # Attach embedding config to global config
@@ -238,6 +239,7 @@ async def test_rate_limiting():
     global_config = MagicMock()
     embedding_config = MagicMock()
     embedding_config.endpoint = "http://localhost:8000"
+    embedding_config.min_request_interval = 0.5
     global_config.embedding = embedding_config
 
     settings = MagicMock(spec=Settings)
@@ -251,6 +253,29 @@ async def test_rate_limiting():
     end_time = asyncio.get_event_loop().time()
 
     assert end_time - start_time >= 0.5  # Minimum interval is 500ms
+
+
+@pytest.mark.asyncio
+async def test_rate_limiting_uses_configured_interval():
+    """min_request_interval should come from EmbeddingConfig, not a hardcoded value."""
+    global_config = MagicMock()
+    embedding_config = MagicMock()
+    embedding_config.endpoint = "http://localhost:8000"
+    embedding_config.min_request_interval = 0.05
+    global_config.embedding = embedding_config
+
+    settings = MagicMock(spec=Settings)
+    settings.global_config = global_config
+
+    service = EmbeddingService(settings)
+    assert service.min_request_interval == 0.05
+
+    start_time = asyncio.get_event_loop().time()
+    await service._apply_rate_limit()
+    await service._apply_rate_limit()
+    end_time = asyncio.get_event_loop().time()
+
+    assert 0.05 <= end_time - start_time < 0.5
 
 
 def test_count_tokens_with_tokenizer(mock_settings):

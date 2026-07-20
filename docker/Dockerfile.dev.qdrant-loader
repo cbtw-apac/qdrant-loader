@@ -1,0 +1,52 @@
+FROM ghcr.io/astral-sh/uv:0.11.28-python3.12-trixie-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /qdrant-loader
+
+COPY uv.lock pyproject.toml README.md* LICENSE* ./
+COPY packages/qdrant-loader-core /qdrant-loader/packages/qdrant-loader-core
+COPY packages/qdrant-loader /qdrant-loader/packages/qdrant-loader
+
+RUN uv sync  --frozen --package qdrant-loader --package qdrant-loader-core --all-extras --no-dev --no-install-project \
+    && .venv/bin/python -m spacy download en_core_web_md
+
+
+
+FROM python:3.12.13-slim
+
+WORKDIR /qdrant-loader
+
+RUN useradd --create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /qdrant-loader
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        git \
+        libgl1 \
+        libglib2.0-0 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+# git must be available at runtime
+# libgl1 + libglib2.0-0: runtime shared libs for opencv-python, which docling pulls
+# (via rapidocr / docling-ibm-models) for image preprocessing in the PDF layout
+# pipeline. python:slim ships neither, so cv2 import fails with "libGL.so.1: cannot
+# open shared object file" during PDF conversion.
+
+USER appuser
+
+COPY --chown=appuser:appuser --from=base /qdrant-loader/.venv /qdrant-loader/.venv
+COPY --chown=appuser:appuser packages/qdrant-loader-core /qdrant-loader/packages/qdrant-loader-core
+COPY --chown=appuser:appuser packages/qdrant-loader /qdrant-loader/packages/qdrant-loader
+
+ENV PATH="/qdrant-loader/.venv/bin:$PATH"
+
+EXPOSE 8081
+
+# The init command is safe to run on every startup.
+# It checks if the collection already exists and skips creation if it does,
+# so it does not drop or recreate existing data.
+CMD ["sh", "-c", "qdrant-loader init --config config.yaml --env .env && exec qdrant-loader serve --config config.yaml --env .env --host 0.0.0.0"]

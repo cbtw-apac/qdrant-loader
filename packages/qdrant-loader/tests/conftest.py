@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 from dotenv import load_dotenv
 from qdrant_loader.config import get_settings, initialize_config
 
@@ -44,8 +45,15 @@ def setup_test_environment():
     data_dir.mkdir(parents=True, exist_ok=True)
 
     # Load test configuration
-    config_path = Path("tests/config.test.yaml")
-    env_path = Path("tests/.env.test")
+    tests_dir = Path(__file__).resolve().parent
+    config_path = tests_dir / "config.test.yaml"
+    config_template_path = tests_dir / "config.test.template.yaml"
+    env_path = tests_dir / ".env.test"
+
+    # Regenerate config.test.yaml from template on every setup run.
+    # This keeps local ignored files in sync and replaces stale config.
+    if config_template_path.exists():
+        shutil.copy(config_template_path, config_path)
 
     # Load environment variables first
     load_dotenv(env_path, override=True)
@@ -54,11 +62,23 @@ def setup_test_environment():
     fallback_env = {
         "LLM_API_KEY": "test-llm-api-key",
         "QDRANT_API_KEY": "test-qdrant-api-key",
+        "QDRANT_URL": "http://localhost:6333",
+        "QDRANT_COLLECTION_NAME": "test_collection",
         "REPO_TOKEN": "test-repo-token",
+        "REPO_URL": "https://github.com/test/test.git",
         "CONFLUENCE_TOKEN": "test-confluence-token",
         "CONFLUENCE_EMAIL": "test@example.com",
+        "CONFLUENCE_URL": "https://test.atlassian.net/wiki",
+        "CONFLUENCE_SPACE_KEY": "TEST",
         "JIRA_TOKEN": "test-jira-token",
         "JIRA_EMAIL": "test@example.com",
+        "JIRA_URL": "https://test.atlassian.net",
+        "JIRA_PROJECT_KEY": "TEST",
+        "OPENAI_API_KEY": "test-openai-api-key",
+        "GRAPH_HOST": "localhost",
+        "GRAPH_PORT": "6379",
+        "GRAPH_NAME": "test_graph",
+        "GRAPH_PASSWORD": "",
     }
     for key, value in fallback_env.items():
         os.environ.setdefault(key, value)
@@ -71,6 +91,23 @@ def setup_test_environment():
     # Clean up after all tests
     if data_dir.exists():
         shutil.rmtree(data_dir)
+
+
+@pytest.fixture(autouse=True)
+def _clear_spacy_model_cache():
+    """Clear the process-wide spaCy model cache before every test.
+
+    Many tests patch spacy.load / spacy_download and assert on call counts
+    or specific mock return values. Without resetting this cache, only the
+    first test to request a given (variant, model_name) key would ever call
+    the mock -- every later test would silently see that first test's cached
+    (mocked) model instead of its own.
+    """
+    from qdrant_loader.core.text_processing import spacy_model_cache
+
+    spacy_model_cache.clear()
+    yield
+    spacy_model_cache.clear()
 
 
 @pytest.fixture(scope="session")
@@ -130,3 +167,22 @@ def mock_requests():
 def test_data_dir():
     """Return the path to the test data directory."""
     return os.path.join(os.path.dirname(__file__), "fixtures")
+
+
+@pytest_asyncio.fixture
+async def state_manager():
+    """Provide a StateManager instance with an in-memory database for testing."""
+    from qdrant_loader.config.state import StateManagementConfig
+    from qdrant_loader.core.state.state_manager import StateManager
+
+    # Create a state manager with in-memory SQLite database
+    config = StateManagementConfig(database_path="sqlite:///:memory:")
+    manager = StateManager(config)
+
+    # Initialize the manager
+    await manager.initialize()
+
+    yield manager
+
+    # Clean up
+    await manager.dispose()

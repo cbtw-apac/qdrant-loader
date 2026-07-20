@@ -1,11 +1,9 @@
 """Text processing module integrating LangChain, spaCy, and NLTK."""
 
 import nltk
-import spacy
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_loader.config import Settings
+from qdrant_loader.core.text_processing import spacy_model_cache
 from qdrant_loader.utils.logging import LoggingConfig
-from spacy.cli.download import download
 
 logger = LoggingConfig.get_logger(__name__)
 
@@ -36,30 +34,36 @@ class TextProcessor:
         except LookupError:
             nltk.download("stopwords")
 
-        # Load spaCy model with optimized settings
+        # Load spaCy model with optimized settings. Cached and shared across
+        # instances -- TextProcessor is constructed fresh per document, and
+        # spacy.load() is too expensive to repeat for every one of them.
         spacy_model = settings.global_config.semantic_analysis.spacy_model
-        try:
-            self.nlp = spacy.load(spacy_model)
-            # Optimize spaCy pipeline for speed
-            # Select only essential components for faster processing
-            if "parser" in self.nlp.pipe_names:
-                # Keep only essential components: tokenizer, tagger, ner (exclude parser)
-                essential_pipes = [
-                    pipe for pipe in self.nlp.pipe_names if pipe != "parser"
-                ]
-                self.nlp.select_pipes(enable=essential_pipes)
-        except OSError:
-            logger.info(f"Downloading spaCy model {spacy_model}...")
-            download(spacy_model)
-            self.nlp = spacy.load(spacy_model)
-            if "parser" in self.nlp.pipe_names:
-                # Keep only essential components: tokenizer, tagger, ner (exclude parser)
-                essential_pipes = [
-                    pipe for pipe in self.nlp.pipe_names if pipe != "parser"
-                ]
-                self.nlp.select_pipes(enable=essential_pipes)
+
+        def _load_nlp():
+            import spacy
+            from spacy.cli.download import download
+
+            try:
+                nlp = spacy.load(spacy_model)
+            except OSError:
+                logger.info(f"Downloading spaCy model {spacy_model}...")
+                download(spacy_model)
+                nlp = spacy.load(spacy_model)
+
+            # Optimize spaCy pipeline for speed: keep only essential
+            # components (tokenizer, tagger, ner), excluding the parser.
+            if "parser" in nlp.pipe_names:
+                essential_pipes = [pipe for pipe in nlp.pipe_names if pipe != "parser"]
+                nlp.select_pipes(enable=essential_pipes)
+            return nlp
+
+        self.nlp = spacy_model_cache.get_or_load(
+            ("text_processor", spacy_model), _load_nlp
+        )
 
         # Initialize LangChain text splitter with configuration from settings
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.global_config.chunking.chunk_size,
             chunk_overlap=settings.global_config.chunking.chunk_overlap,
@@ -185,6 +189,8 @@ class TextProcessor:
             if chunk_size:
                 # Create a new text splitter with the custom chunk size
                 # Ensure chunk_overlap is smaller than chunk_size
+                from langchain_text_splitters import RecursiveCharacterTextSplitter
+
                 chunk_overlap = min(chunk_size // 4, 50)  # 25% of chunk size, max 50
                 text_splitter = RecursiveCharacterTextSplitter(
                     chunk_size=chunk_size,

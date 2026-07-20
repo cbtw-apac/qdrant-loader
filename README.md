@@ -5,9 +5,9 @@
 [![PyPI - qdrant-loader-core](https://img.shields.io/pypi/v/qdrant-loader-core?label=qdrant-loader-core)](https://pypi.org/project/qdrant-loader-core/)
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/martin-papy/qdrant-loader?labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 [![Test Coverage](https://img.shields.io/badge/coverage-view%20reports-blue)](https://qdrant-loader.net/coverage/)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-📝 **[Changelog v1.0.3](./CHANGELOG.md)** - Latest improvements and bug fixes
+📝 **[Changelog v1.0.4](./CHANGELOG.md)** - Latest improvements and bug fixes
 
 <div align="left">
 A comprehensive toolkit for loading data into Qdrant vector database with advanced MCP server support for AI-powered development workflows.
@@ -259,7 +259,7 @@ uv sync
 
 ## 📄 License
 
-This project is licensed under the GNU GPLv3 - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ---
 

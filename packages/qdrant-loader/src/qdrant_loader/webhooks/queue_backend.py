@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
@@ -100,6 +101,7 @@ class QueueBackendManager:
     _backend: QueueBackend | None = None
     _job_queue: SQLiteJobQueue | None = None
     _engine = None
+    _queue_db_op_lock: asyncio.Lock | None = None
 
     @classmethod
     async def initialize(cls) -> QueueBackend:
@@ -112,7 +114,12 @@ class QueueBackendManager:
         await create_tables(engine)
 
         cls._engine = engine
-        cls._job_queue = SQLiteJobQueue(session_factory)
+        if cls._queue_db_op_lock is None:
+            cls._queue_db_op_lock = asyncio.Lock()
+        cls._job_queue = SQLiteJobQueue(
+            session_factory,
+            db_op_lock=cls._queue_db_op_lock,
+        )
         cls._backend = SQLiteChangeEventQueue(cls._job_queue)
         logger.info(
             "Initialized persistent webhook queue",
@@ -140,6 +147,7 @@ class QueueBackendManager:
         if cls._engine is not None:
             await dispose_engine(cls._engine)
         cls._engine = None
+        cls._queue_db_op_lock = None
         cls._job_queue = None
         cls._backend = None
 
@@ -155,6 +163,7 @@ class QueueBackendManager:
     def reset(cls) -> None:
         """Reset manager state (for tests)."""
         cls._engine = None
+        cls._queue_db_op_lock = None
         cls._job_queue = None
         cls._backend = None
 

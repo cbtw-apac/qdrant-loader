@@ -40,7 +40,7 @@ async def main() -> None:
     cfg = StateManagementConfig(database_path=str(db_path))
     engine, session_factory = initialize_engine_and_session(cfg)
     await create_tables(engine)
-    queue = SQLiteJobQueue(session_factory)
+    queue = SQLiteJobQueue(session_factory, db_op_lock=asyncio.Lock())
 
     # 1) Prepare jobs
     for i in range(args.jobs):

@@ -2,6 +2,7 @@
 State management service for tracking document ingestion state.
 """
 
+import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -33,8 +34,10 @@ class StateManager:
         """Initialize the state manager with configuration."""
         self.config = config
         self._initialized = False
+        self._is_sqlite_backend = False
         self._engine: AsyncEngine | None = None
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
+        self._queue_db_op_lock = asyncio.Lock()
         self.logger = LoggingConfig.get_logger(__name__)
 
     @property
@@ -48,6 +51,11 @@ class StateManager:
         if self._session_factory is None:
             raise RuntimeError("State manager session factory is not initialized")
         return self._session_factory
+
+    @property
+    def queue_db_op_lock(self) -> asyncio.Lock:
+        """Shared lock for queue DB operations on this state backend."""
+        return self._queue_db_op_lock
 
     async def get_session(self) -> "AsyncSession":
         """Return an async session context manager, initializing if needed.
@@ -100,6 +108,7 @@ class StateManager:
             # Handle special databases and generate URL
             database_url = _gen_url(db_path_str)
             self.logger.debug(f"Generated database URL: {database_url}")
+            self._is_sqlite_backend = database_url.startswith("sqlite")
 
             # Create database engine and session factory
             self.logger.debug("Creating database engine and session factory")
@@ -448,6 +457,14 @@ class StateManager:
             f"Updating document state for {document.source_type}:{document.source}:{document.id} (project: {project_id})"
         )
         try:
+            if self._is_sqlite_backend:
+                async with self._queue_db_op_lock:
+                    return await _transitions.update_document_state(
+                        self._session_factory,  # type: ignore[arg-type]
+                        document=document,
+                        project_id=project_id,
+                    )
+
             return await _transitions.update_document_state(
                 self._session_factory,  # type: ignore[arg-type]
                 document=document,
@@ -464,6 +481,38 @@ class StateManager:
                 },
             )
             raise
+
+    async def update_document_states_batch(
+        self, documents: list[Document], project_id: str | None = None
+    ) -> list[tuple[Document, DocumentStateRecord | None, Exception | None]]:
+        """Update state for multiple documents in one session/commit.
+
+        Unlike calling ``update_document_state`` once per document, this
+        commits once for the whole batch (each document's write is isolated
+        by its own SAVEPOINT, so one failure doesn't affect the others).
+        Returns per-document ``(document, record_or_None, exception_or_None)``
+        so callers can report success/failure exactly as before.
+        """
+        if not self._initialized:
+            raise RuntimeError("StateManager not initialized. Call initialize() first.")
+
+        self.logger.debug(
+            f"Updating document state for {len(documents)} documents in one batch "
+            f"(project: {project_id})"
+        )
+        if self._is_sqlite_backend:
+            async with self._queue_db_op_lock:
+                return await _transitions.update_document_states_batch(
+                    self._session_factory,  # type: ignore[arg-type]
+                    documents=documents,
+                    project_id=project_id,
+                )
+
+        return await _transitions.update_document_states_batch(
+            self._session_factory,  # type: ignore[arg-type]
+            documents=documents,
+            project_id=project_id,
+        )
 
     async def update_conversion_metrics(
         self,

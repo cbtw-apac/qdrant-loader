@@ -26,13 +26,14 @@ venv/
 env/
 ENV/
 
-# IDE
+# IDE + AI tools
 .idea/
 .vscode/
 .cursor/*
 !.cursor/rules/
 *.swp
 *.swo
+.claude/
 
 # Environment variables
 .env
@@ -56,6 +57,7 @@ dist/
 build/ 
 config.yaml
 tests/config.test.yaml
+**/tests/config.test.yaml
 test-site/
 
 # Package-specific build artifacts
@@ -102,3 +104,15 @@ internal/
 
 # Beads issue tracking
 .beads/
+
+# FalkorDB / Redis snapshots
+packages/qdrant-loader-core/data/*.rdb
+
+# local workspaces
+*-qdrant-workspace
+
+# Claude skills
+docs/superpowers
+
+# Claude mcp
+.mcp.json

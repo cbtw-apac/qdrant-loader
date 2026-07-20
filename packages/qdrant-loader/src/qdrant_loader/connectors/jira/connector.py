@@ -61,11 +61,12 @@ logger = LoggingConfig.get_logger(__name__)
 class BaseJiraConnector(BaseConnector):
     """Base class for all Jira connectors."""
 
-    def __init__(self, config: JiraProjectConfig):
+    def __init__(self, config: JiraProjectConfig, checkpoint_cursor: str | None = None):
         """Initialize the Jira connector.
 
         Args:
             config: The Jira configuration.
+            checkpoint_cursor: Optional pagination cursor to resume from (WS-2 feature).
 
         Raises:
             ValueError: If required authentication parameters are not set.
@@ -83,6 +84,9 @@ class BaseJiraConnector(BaseConnector):
         self._last_sync: datetime | None = None
         self._rate_limiter = RateLimiter.per_minute(self.config.requests_per_minute)
         self._initialized = False
+
+        # Checkpoint support (WS-2 feature)
+        self._checkpoint_cursor = checkpoint_cursor
 
         # Initialize file conversion components if enabled
         self.file_converter: FileConverter | None = None
@@ -295,6 +299,13 @@ class BaseJiraConnector(BaseConnector):
         # Add updated_after filter if provided
         if updated_after:
             jql += f" AND updated >= '{updated_after.strftime('%Y-%m-%d %H:%M')}'"
+
+        # Pagination (and offset-based checkpoint resume, see
+        # JiraDataCenterConnector.get_issues) relies on a stable row order
+        # across requests; without an explicit ORDER BY, Jira may reorder
+        # results between pages (e.g. new issues created mid-scan), causing
+        # resume to skip or duplicate issues.
+        jql += " ORDER BY key ASC"
 
         return jql
 
@@ -523,6 +534,15 @@ class BaseJiraConnector(BaseConnector):
                 "parent_key": issue.parent_key,
                 "subtasks": issue.subtasks,
                 "linked_issues": issue.linked_issues,
+                "linked_issue_details": [
+                    {
+                        "key": link.key,
+                        "link_type": link.link_type,
+                        "direction": link.direction,
+                        "relation": link.relation,
+                    }
+                    for link in issue.linked_issue_details
+                ],
                 "comments": [
                     {
                         "id": comment.id,
@@ -556,6 +576,10 @@ class BaseJiraConnector(BaseConnector):
             if self.config.extra_fields:
                 for field in self.config.extra_fields:
                     metadata[field.name] = getattr(issue, field.name)
+            # Propagate checkpoint info into document metadata if present
+            cp = getattr(issue, "ingestion_checkpoint", None)
+            if cp:
+                metadata["__ingestion_checkpoint"] = cp
             base_url = str(self.config.base_url).rstrip("/")
             document = Document(
                 id=issue.id,
