@@ -49,6 +49,36 @@ def _load_project_secrets() -> dict[str, str]:
     return {}
 
 
+def webhook_auth_configured() -> bool:
+    """Return True if at least one webhook authentication method is configured.
+
+    Checked at server startup so misconfiguration fails closed instead of
+    silently accepting unauthenticated requests.
+    """
+    has_global_secret = bool(os.getenv(WEBHOOK_SECRET_ENV_VAR)) or bool(
+        os.getenv("WEBHOOK_SECRETS")
+    )
+    has_project_secret = any(
+        key.startswith("WEBHOOK_SECRET_") and bool(value)
+        for key, value in os.environ.items()
+    )
+    # Read fresh rather than trusting the import-time WEBHOOK_ENABLE_COGNITO_JWT
+    # constant: this is called before .env may have been loaded into os.environ.
+    cognito_enabled = os.getenv("WEBHOOK_ENABLE_COGNITO_JWT", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    return has_global_secret or has_project_secret or cognito_enabled
+
+
+WEBHOOK_AUTH_NOT_CONFIGURED_MESSAGE = (
+    "Webhook authentication is not configured. Set WEBHOOK_SECRET, "
+    "WEBHOOK_SECRETS, WEBHOOK_SECRET_<PROJECT_ID>, or enable Cognito JWT "
+    "(WEBHOOK_ENABLE_COGNITO_JWT=true)."
+)
+
+
 async def get_webhook_secret(
     project_id: str | None = None,
     workspace_id: str | None = None,
