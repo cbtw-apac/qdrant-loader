@@ -13,6 +13,7 @@ This documentation is organized to help you accomplish specific tasks and unders
 - **[Data Sources](./detailed-guides/data-sources/)** - Complete guides for all supported data sources
 - **[File Conversion](./detailed-guides/file-conversion/)** - Everything about processing different file types
 - **[MCP Server](./detailed-guides/mcp-server/)** - AI development integration and search capabilities
+- **[Incremental Ingestion & Resume](./detailed-guides/incremental-ingestion/)** - How re-ingestion skips unchanged content and recovers from interrupted runs
 - **[Workflows](./workflows/)** - Common, CI/CD, content management, development, and team collaboration
 
 ### 🔧 Configuration
@@ -45,6 +46,10 @@ This documentation is organized to help you accomplish specific tasks and unders
 #### 📝 **Process different file types**
 
 - [File conversion guide](./detailed-guides/file-conversion/) - Comprehensive file type support
+
+#### 🔁 **Re-run ingestion safely or recover from an interruption**
+
+- [Incremental ingestion & resume](./detailed-guides/incremental-ingestion/) - What gets skipped, what resumes, and how to force a full re-ingest
 
 #### 🤖 **Integrate with AI tools**
 
