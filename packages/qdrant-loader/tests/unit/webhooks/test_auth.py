@@ -46,6 +46,21 @@ def test_webhook_auth_configured_true_with_secrets_json(monkeypatch):
     assert webhook_auth_configured() is True
 
 
+def test_webhook_auth_configured_false_when_secrets_json_is_empty_dict(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_SECRETS", "{}")
+    assert webhook_auth_configured() is False
+
+
+def test_webhook_auth_configured_false_when_secrets_json_is_malformed(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_SECRETS", "{not valid json")
+    assert webhook_auth_configured() is False
+
+
+def test_webhook_auth_configured_false_when_secrets_json_values_empty(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_SECRETS", '{"project1": ""}')
+    assert webhook_auth_configured() is False
+
+
 def test_webhook_auth_configured_true_with_project_scoped_secret(monkeypatch):
     monkeypatch.setenv("WEBHOOK_SECRET_MYPROJECT", "secret")
     assert webhook_auth_configured() is True
@@ -90,3 +105,28 @@ def test_verify_webhook_token_rejects_invalid(monkeypatch):
             )
         )
     assert exc_info.value.status_code == 401
+
+
+def test_verify_webhook_token_honors_cognito_flag_set_after_import(monkeypatch):
+    # AIKH-2368: the Cognito flag must be read fresh at request time, not
+    # frozen at module import (serve_cmd imports this module before .env
+    # is loaded), otherwise a valid JWT would be rejected as a plain secret.
+    monkeypatch.setenv("WEBHOOK_ENABLE_COGNITO_JWT", "true")
+    monkeypatch.setenv("WEBHOOK_SECRET", "secret")
+
+    async def fake_validate_token(cls, token):
+        return {"sub": "user"}
+
+    monkeypatch.setattr(
+        "qdrant_loader.webhooks.auth.CognitoJWTValidator.validate_token",
+        classmethod(fake_validate_token),
+    )
+
+    fake_jwt = "header.payload.signature"
+    asyncio.run(
+        verify_webhook_token(
+            project_id=None,
+            webhook_token=None,
+            authorization=f"Bearer {fake_jwt}",
+        )
+    )

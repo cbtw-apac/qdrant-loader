@@ -20,10 +20,6 @@ WEBHOOK_USE_SECRETS_MANAGER = os.getenv(
     "WEBHOOK_USE_SECRETS_MANAGER", "false"
 ).lower() in ("true", "1", "yes")
 
-WEBHOOK_ENABLE_COGNITO_JWT = os.getenv(
-    "WEBHOOK_ENABLE_COGNITO_JWT", "false"
-).lower() in ("true", "1", "yes")
-
 WEBHOOK_TRUSTED_PROXY = os.getenv("WEBHOOK_TRUSTED_PROXY", None)
 
 COGNITO_REGION = os.getenv("COGNITO_REGION", "")
@@ -49,27 +45,34 @@ def _load_project_secrets() -> dict[str, str]:
     return {}
 
 
+def _cognito_jwt_enabled() -> bool:
+    # Read fresh rather than trusting the import-time WEBHOOK_ENABLE_COGNITO_JWT
+    # constant: callers may run before .env has been loaded into os.environ.
+    return os.getenv("WEBHOOK_ENABLE_COGNITO_JWT", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
+
 def webhook_auth_configured() -> bool:
     """Return True if at least one webhook authentication method is configured.
 
     Checked at server startup so misconfiguration fails closed instead of
     silently accepting unauthenticated requests.
     """
-    has_global_secret = bool(os.getenv(WEBHOOK_SECRET_ENV_VAR)) or bool(
-        os.getenv("WEBHOOK_SECRETS")
-    )
+    has_global_secret = bool(os.getenv(WEBHOOK_SECRET_ENV_VAR))
+    has_json_project_secret = any(_load_project_secrets().values())
     has_project_secret = any(
         key.startswith("WEBHOOK_SECRET_") and bool(value)
         for key, value in os.environ.items()
     )
-    # Read fresh rather than trusting the import-time WEBHOOK_ENABLE_COGNITO_JWT
-    # constant: this is called before .env may have been loaded into os.environ.
-    cognito_enabled = os.getenv("WEBHOOK_ENABLE_COGNITO_JWT", "false").lower() in (
-        "true",
-        "1",
-        "yes",
+    return (
+        has_global_secret
+        or has_json_project_secret
+        or has_project_secret
+        or _cognito_jwt_enabled()
     )
-    return has_global_secret or has_project_secret or cognito_enabled
 
 
 WEBHOOK_AUTH_NOT_CONFIGURED_MESSAGE = (
@@ -154,7 +157,7 @@ class CognitoJWTValidator:
 
     @classmethod
     async def validate_token(cls, token: str) -> dict[str, Any]:
-        if not WEBHOOK_ENABLE_COGNITO_JWT:
+        if not _cognito_jwt_enabled():
             return {"sub": "local-dev"}
 
         try:
@@ -207,7 +210,7 @@ async def verify_webhook_token(
     secret = await get_webhook_secret(project_id=project_id)
     token_value = _extract_bearer_token(authorization) or webhook_token
 
-    if WEBHOOK_ENABLE_COGNITO_JWT and token_value and _looks_like_jwt(token_value):
+    if _cognito_jwt_enabled() and token_value and _looks_like_jwt(token_value):
         await CognitoJWTValidator.validate_token(token_value)
         return
 
