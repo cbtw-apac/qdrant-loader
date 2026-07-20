@@ -14,7 +14,7 @@ from qdrant_loader.utils.logging import LoggingConfig
 logger = LoggingConfig.get_logger(__name__)
 
 WEBHOOK_SECRET_ENV_VAR = "WEBHOOK_SECRET"
-WEBHOOK_QUERY_PARAM = "token"
+WEBHOOK_QUERY_PARAM = "secret"
 
 WEBHOOK_USE_SECRETS_MANAGER = os.getenv(
     "WEBHOOK_USE_SECRETS_MANAGER", "false"
@@ -171,7 +171,7 @@ async def verify_webhook_token(
     """Verify webhook access for Jira-compatible endpoints.
 
     Jira Cloud only supports shared-secret query tokens, so webhook routes accept
-    the project-scoped WEBHOOK_SECRET via Bearer header or ?token= query param.
+    the project-scoped WEBHOOK_SECRET via Bearer header or ?secret= query param.
     Cognito JWT is validated when enabled and the bearer token is a JWT.
     """
     secret = await get_webhook_secret(project_id=project_id)

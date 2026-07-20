@@ -14,7 +14,12 @@ import os
 import structlog
 from structlog.stdlib import LoggerFactory
 
-from .logging_filters import ApplicationFilter, QdrantVersionFilter, RedactionFilter
+from .logging_filters import (
+    ApplicationFilter,
+    QdrantVersionFilter,
+    RedactionFilter,
+    UvicornAccessRedactFilter,
+)
 from .logging_processors import CleanFormatter, redact_processor
 
 try:
@@ -160,6 +165,17 @@ class LoggingConfig:
         )
         if not has_app_filter:
             root_logger.addFilter(ApplicationFilter())
+
+        # uvicorn.access has propagate=False in uvicorn's own logging config, so
+        # it bypasses the root logger's RedactionFilter above. Attach directly
+        # so webhook secrets/tokens in the request query string aren't logged
+        # in plaintext (see UvicornAccessRedactFilter docstring for details).
+        uvicorn_access_logger = logging.getLogger("uvicorn.access")
+        if not any(
+            isinstance(f, UvicornAccessRedactFilter)
+            for f in uvicorn_access_logger.filters
+        ):
+            uvicorn_access_logger.addFilter(UvicornAccessRedactFilter())
 
         # Optional suppressions
         if suppress_qdrant_warnings:
