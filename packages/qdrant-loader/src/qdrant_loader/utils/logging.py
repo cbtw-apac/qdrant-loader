@@ -105,7 +105,8 @@ class UvicornAccessRedactFilter(logging.Filter):
     """
 
     _SENSITIVE_QUERY_PARAM = re.compile(
-        r"(?i)([?&](?:token|secret|signature|password|api[_-]?key|access[_-]?token)=)[^&\s\"]+"
+        r"(?i)([?&](?:token|secret|signature|password|authorization|"
+        r"(?:api|access|private)[_-]?key|access[_-]?token)=)[^&\s\"]+"
     )
 
     def filter(self, record: logging.LogRecord) -> bool:

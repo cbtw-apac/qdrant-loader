@@ -119,6 +119,63 @@ def test_uvicorn_access_redact_filter_masks_query_secret():
         access_logger.propagate = prev_propagate
 
 
+def test_uvicorn_access_redact_filter_masks_additional_credential_params():
+    """access_key, private_key and authorization query params must also be masked."""
+    logging_mod = import_module("qdrant_loader_core.logging")
+    UvicornAccessRedactFilter = logging_mod.UvicornAccessRedactFilter
+
+    captured_messages = []
+
+    class TestHandler(logging.Handler):
+        def emit(self, record):
+            captured_messages.append(self.format(record))
+
+    access_logger = logging.getLogger("uvicorn.access")
+    prev_handlers = list(access_logger.handlers)
+    prev_filters = list(access_logger.filters)
+    prev_propagate = access_logger.propagate
+
+    try:
+        for h in list(access_logger.handlers):
+            access_logger.removeHandler(h)
+        for f in list(access_logger.filters):
+            access_logger.removeFilter(f)
+
+        test_handler = TestHandler()
+        access_logger.addHandler(test_handler)
+        access_logger.addFilter(UvicornAccessRedactFilter())
+        access_logger.setLevel(logging.INFO)
+        access_logger.propagate = False
+
+        access_logger.info(
+            '%s - "%s %s HTTP/%s" %d',
+            "127.0.0.1:0",
+            "GET",
+            "/path?access_key=AKIAABCDEF&private_key=PRIVATEKEY123&authorization=Bearer123",
+            "1.1",
+            200,
+        )
+
+        assert len(captured_messages) == 1
+        message = captured_messages[0]
+        assert "AKIAABCDEF" not in message
+        assert "PRIVATEKEY123" not in message
+        assert "Bearer123" not in message
+        assert "access_key=***REDACTED***" in message
+        assert "private_key=***REDACTED***" in message
+        assert "authorization=***REDACTED***" in message
+    finally:
+        for f in list(access_logger.filters):
+            access_logger.removeFilter(f)
+        for h in list(access_logger.handlers):
+            access_logger.removeHandler(h)
+        for f in prev_filters:
+            access_logger.addFilter(f)
+        for h in prev_handlers:
+            access_logger.addHandler(h)
+        access_logger.propagate = prev_propagate
+
+
 def test_setup_attaches_uvicorn_access_redact_filter_once():
     logging_mod = import_module("qdrant_loader_core.logging")
     LoggingConfig = logging_mod.LoggingConfig
