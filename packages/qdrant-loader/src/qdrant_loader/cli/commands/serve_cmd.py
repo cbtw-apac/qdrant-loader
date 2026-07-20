@@ -101,6 +101,10 @@ async def _serve_main(
     from qdrant_loader.core.worker.queue import SQLiteJobQueue
     from qdrant_loader.core.worker.scheduler import IncrementalPullScheduler
     from qdrant_loader.utils.logging import LoggingConfig
+    from qdrant_loader.webhooks.auth import (
+        WEBHOOK_AUTH_NOT_CONFIGURED_MESSAGE,
+        webhook_auth_configured,
+    )
     from qdrant_loader.webhooks.queue_backend import (
         QueueBackendManager,
         SQLiteChangeEventQueue,
@@ -125,6 +129,14 @@ async def _serve_main(
 
     # Load configuration (required before get_global_config / get_settings)
     load_config_with_workspace(workspace_config, config, env)
+
+    # Fail closed on missing webhook auth BEFORE any DB engine/uvicorn/asyncio
+    # resources are created, so misconfiguration exits cleanly instead of
+    # surfacing as an unhandled SystemExit deep inside uvicorn's lifespan
+    # (which otherwise races with StateManager teardown and leaves a dangling
+    # aiosqlite task at interpreter shutdown).
+    if not webhook_auth_configured():
+        raise click.ClickException(WEBHOOK_AUTH_NOT_CONFIGURED_MESSAGE)
 
     # Setup graceful shutdown
     stop_event = asyncio.Event()

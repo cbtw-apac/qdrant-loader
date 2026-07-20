@@ -202,6 +202,29 @@ Implementation: `qdrant_loader/core/state/state_manager.py`
 - Metadata handling
 - Connection management with retry logic
 
+### Graph Module
+
+**Purpose**: Extract, store, and traverse knowledge graphs from various data sources
+
+**Key Features**:
+
+- Backend-agnostic graph store interface (FalkorDB, Neptune, etc.)
+- Source-specific entity extractors (Jira, Confluence, Git, etc.)
+- Node and edge management with batch operations
+- Graph traversal and querying capabilities
+- Multi-project isolation and scoping
+- Async-first API for scalable operations
+
+**Supported Operations**:
+
+- Extract entities and relationships from documents
+- Upsert nodes and edges in graph databases
+- Traverse graphs up to specified depth with optional edge filtering
+- Execute custom Cypher queries for advanced patterns
+- Manage entity metadata (people, containers, labels, concepts)
+
+For detailed information, see [Graph Module Documentation](./graph-module.md)
+
 ## 🧪 Data Flow
 
 ### Ingestion Pipeline
@@ -236,7 +259,7 @@ Implementation: `qdrant_loader/core/state/state_manager.py`
 
 QDrant Loader uses a connector-based architecture for extensibility. Connectors are resolved through the connector factory in the pipeline orchestrator:
 
-Implementation citation: [PipelineOrchestrator._collect_documents_from_sources](../../../packages/qdrant-loader/src/qdrant_loader/core/pipeline/orchestrator.py#L278)
+Implementation citation: [PipelineOrchestrator.\_collect_documents_from_sources](../../../packages/qdrant-loader/src/qdrant_loader/core/pipeline/orchestrator.py#L278)
 
 ### Available Connectors
 
@@ -259,6 +282,19 @@ QDrant Loader uses SQLite with SQLAlchemy for state management:
 
 Implementation citation: [StateManager.update_document_state](../../../packages/qdrant-loader/src/qdrant_loader/core/state/state_manager.py#L314)
 
+### Resuming an Interrupted Run
+
+Two separate mechanisms cooperate here and are easy to conflate — keep them distinct when touching this code:
+
+- **`DocumentStateRecord`** ([models.py](../../../packages/qdrant-loader/src/qdrant_loader/core/state/models.py#L146)) is the per-document ledger `StateChangeDetector.classify_batch` ([state_change_detector.py#L116](../../../packages/qdrant-loader/src/qdrant_loader/core/state/state_change_detector.py#L116)) compares against to decide "already processed, skip it". It's keyed on content hash, not on when ingestion happened.
+- **`IngestionCheckpoint`** ([checkpoint_manager.py#L53](../../../packages/qdrant-loader/src/qdrant_loader/core/state/checkpoint_manager.py#L53)) is a per-source pagination cursor (page token / JQL window / commit / timestamp) that lets a connector resume _fetching_ roughly where it left off. It has no per-document granularity.
+
+Streaming batches documents in bounded chunks of up to 256 (`PipelineOrchestrator.process_documents`, [orchestrator.py#L242](../../../packages/qdrant-loader/src/qdrant_loader/core/pipeline/orchestrator.py#L242)) that each go through `DocumentPipeline.process_batch`. Two correctness properties matter for resume and are easy to accidentally regress:
+
+1. **State must be persisted per document, not per batch.** `UpsertWorker.process_embedded_chunks` ([upsert_worker.py#L317](../../../packages/qdrant-loader/src/qdrant_loader/core/pipeline/workers/upsert_worker.py#L317)) invokes an `on_document_complete` callback the instant a document's last chunk is accounted for — before the rest of the batch (up to 256 documents) finishes. `PipelineOrchestrator._persist_single_document_state` ([orchestrator.py#L763](../../../packages/qdrant-loader/src/qdrant_loader/core/pipeline/orchestrator.py#L763)) is wired to that callback and writes the `DocumentStateRecord` immediately. Before this existed, state was only written once the entire batch finished (`_update_document_states`, still present as an idempotent end-of-batch safety net), so an interruption mid-batch lost state for documents that had already been durably upserted to QDrant, and a restart reprocessed them.
+2. **A callback failure must not be swallowed.** If persisting a document's state raises, `UpsertWorker` collects it and re-raises once all pending upserts have drained, instead of logging and continuing. `document_pipeline.process_batch`'s catch-all turns that into a failed `BatchResult` for the whole streaming batch, which keeps `PipelineOrchestrator.process_documents` from advancing the `IngestionCheckpoint` past documents whose state was never actually written — a batch reported successful must mean its state really landed in the database.
+3. **`Document.calculate_content_hash`** ([document.py#L132](../../../packages/qdrant-loader/src/qdrant_loader/core/document.py#L132)) excludes any metadata key prefixed with `__` (e.g. `__ingestion_checkpoint`, the pagination cursor JIRA connectors attach to documents) from the hash. That prefix is the established convention for connector-internal bookkeeping — never fold it into content identity, since a cursor token has no guarantee of being stable across two fetches of the same, unchanged page, and doing so makes every document on that page look "updated" on every single run.
+
 ## 🚀 Performance Considerations
 
 ### Asynchronous Processing
@@ -277,7 +313,7 @@ Implementation citation: [QdrantManager.upsert_points](../../../packages/qdrant-
 
 Each connector handles its own authentication:
 
-Implementation citation: [ConfluenceConnector._setup_authentication](../../../packages/qdrant-loader/src/qdrant_loader/connectors/confluence/connector.py#L114)
+Implementation citation: [ConfluenceConnector.\_setup_authentication](../../../packages/qdrant-loader/src/qdrant_loader/connectors/confluence/connector.py#L114)
 
 ### Data Privacy
 
