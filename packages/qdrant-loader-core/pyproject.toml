@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qdrant-loader-core"
-version = "1.0.3"
+version = "1.0.4"
 description = "Shared core for provider-agnostic LLM support and configuration mapping for qdrant-loader ecosystem"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -53,7 +53,7 @@ gemini = [
     "google-genai>=0.3.0",
 ]
 graph = [
-    "FalkorDB>=1.0"
+    "FalkorDB>=1.0",
 ]
 
 [project.urls]
