@@ -1,5 +1,7 @@
 # QDrant Loader
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fcbtw-apac%2Fqdrant-loader.svg)](https://mcptoplist.com/server/glama%2Fcbtw-apac%2Fqdrant-loader)
+
 [![PyPI - qdrant-loader](https://img.shields.io/pypi/v/qdrant-loader?label=qdrant-loader)](https://pypi.org/project/qdrant-loader/)
 [![PyPI - mcp-server](https://img.shields.io/pypi/v/qdrant-loader-mcp-server?label=mcp-server)](https://pypi.org/project/qdrant-loader-mcp-server/)
 [![PyPI - qdrant-loader-core](https://img.shields.io/pypi/v/qdrant-loader-core?label=qdrant-loader-core)](https://pypi.org/project/qdrant-loader-core/)
