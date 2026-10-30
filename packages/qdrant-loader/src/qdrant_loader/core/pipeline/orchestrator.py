@@ -628,7 +628,7 @@ class PipelineOrchestrator:
         total_processed_count = 0
         aggregated_result = PipelineResult()
         failed_projects: list[str] = []
-        permanent_errors: list[PermanentJobError] = []
+        permanent_errors: list[tuple[str, PermanentJobError]] = []
         project_ids = self.project_manager.list_project_ids()
 
         logger.info(f"Processing {len(project_ids)} projects")
@@ -651,8 +651,19 @@ class PipelineOrchestrator:
                 )
             except PermanentJobError as e:
                 # Finish the other projects first, then raise
-                self._add_pipeline_result(aggregated_result, self.last_pipeline_result)
-                permanent_errors.append(e)
+                if self.last_pipeline_result is None:
+                    # Failed before any documents were processed, e.g. the Qdrant preflight
+                    aggregated_result.error_count += 1
+                    aggregated_result.errors.append(
+                        f"project_id={project_id}; "
+                        f"error_type={type(e).__name__}; "
+                        f"message={sanitize_exception_message(e)}"
+                    )
+                else:
+                    self._add_pipeline_result(
+                        aggregated_result, self.last_pipeline_result
+                    )
+                permanent_errors.append((project_id, e))
                 failed_projects.append(project_id)
                 continue
             except ConnectorConfigurationError as e:
@@ -713,8 +724,11 @@ class PipelineOrchestrator:
             )
         if permanent_errors:
             raise PermanentJobError(
-                "; ".join(str(e) for e in permanent_errors)
-            ) from permanent_errors[0]
+                "; ".join(
+                    f"project_id={project_id}: {sanitize_exception_message(e)}"
+                    for project_id, e in permanent_errors
+                )
+            ) from permanent_errors[0][1]
         return total_processed_count
 
     async def _detect_document_changes(
