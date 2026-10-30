@@ -141,7 +141,15 @@ class FileProcessor:
                     else:
                         pattern_ext = os.path.splitext(pattern)[1].lower()
 
-                    if pattern_ext and file_ext == pattern_ext:
+                    if pattern_ext:
+                        matched = file_ext == pattern_ext
+                    else:
+                        name = rel_path if "/" in pattern else file_basename
+                        matched = fnmatch.fnmatchcase(
+                            name.lower(), pattern.lstrip("/").lower()
+                        )
+
+                    if matched:
                         file_type_match = True
                         self.logger.debug(
                             f"File {rel_path} matches file type pattern {pattern}"
