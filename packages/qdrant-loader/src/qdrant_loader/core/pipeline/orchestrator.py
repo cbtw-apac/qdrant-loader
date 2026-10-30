@@ -600,6 +600,20 @@ class PipelineOrchestrator:
             f"(out of {result.success_count + result.error_count}): {error_summary}"
         )
 
+    @staticmethod
+    def _add_pipeline_result(
+        total: PipelineResult, result: PipelineResult | None
+    ) -> None:
+        """Add one project's pipeline result to the running total."""
+        if result is None:
+            return
+        total.success_count += result.success_count
+        total.error_count += result.error_count
+        total.processed_document_count += result.processed_document_count
+        total.failed_document_count += result.failed_document_count
+        total.total_size_bytes += result.total_size_bytes
+        total.errors.extend(result.errors)
+
     async def _process_all_projects(
         self,
         source_type: str | None = None,
@@ -614,6 +628,7 @@ class PipelineOrchestrator:
         total_processed_count = 0
         aggregated_result = PipelineResult()
         failed_projects: list[str] = []
+        permanent_errors: list[PermanentJobError] = []
         project_ids = self.project_manager.list_project_ids()
 
         logger.info(f"Processing {len(project_ids)} projects")
@@ -628,29 +643,18 @@ class PipelineOrchestrator:
                     force=force,
                     since=since,
                 )
-                project_result = self.last_pipeline_result
                 total_processed_count += project_documents
-
-                if project_result is not None:
-                    aggregated_result.success_count += project_result.success_count
-                    aggregated_result.error_count += project_result.error_count
-                    aggregated_result.processed_document_count += (
-                        project_result.processed_document_count
-                    )
-                    aggregated_result.failed_document_count += (
-                        project_result.failed_document_count
-                    )
-                    aggregated_result.total_size_bytes += (
-                        project_result.total_size_bytes
-                    )
-                    aggregated_result.errors.extend(project_result.errors)
+                self._add_pipeline_result(aggregated_result, self.last_pipeline_result)
 
                 logger.debug(
                     f"Processed {project_documents} documents from project: {project_id}"
                 )
-            except PermanentJobError:
-                # PermanentJobError from process_documents should propagate
-                raise
+            except PermanentJobError as e:
+                # Finish the other projects first, then raise
+                self._add_pipeline_result(aggregated_result, self.last_pipeline_result)
+                permanent_errors.append(e)
+                failed_projects.append(project_id)
+                continue
             except ConnectorConfigurationError as e:
                 logger.error(
                     f"Configuration error in project {project_id}: "
@@ -707,6 +711,10 @@ class PipelineOrchestrator:
             logger.info(
                 f"Completed processing all projects: {total_processed_count} total documents"
             )
+        if permanent_errors:
+            raise PermanentJobError(
+                "; ".join(str(e) for e in permanent_errors)
+            ) from permanent_errors[0]
         return total_processed_count
 
     async def _detect_document_changes(
