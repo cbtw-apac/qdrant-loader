@@ -74,6 +74,34 @@ class TestFileProcessor:
         assert processor.should_process_file(py_file) is False
         assert processor.should_process_file(hidden_file) is False
 
+    def test_file_types_without_extension(
+        self, temp_dir, create_test_file, base_config
+    ):
+        """Test file type patterns without an extension, matched as globs."""
+        makefile = create_test_file("Makefile")
+        nested_makefile = create_test_file("src/Makefile")
+        dockerfile = create_test_file("docker/Dockerfile.dev")
+        script = create_test_file("bin/deploy")
+        nested_script = create_test_file("tools/bin/deploy")
+        other = create_test_file("LICENSE")
+        md_file = create_test_file("README.md")
+
+        config = base_config.model_copy(
+            update={"file_types": ["*.md", "makefile", "Dockerfile*", "bin/*"]}
+        )
+        processor = FileProcessor(config, temp_dir)
+
+        # Without a slash, the pattern matches the file name, case-insensitively
+        assert processor.should_process_file(makefile) is True
+        assert processor.should_process_file(nested_makefile) is True
+        assert processor.should_process_file(dockerfile) is True
+        # With a slash, it matches the path from the repository root
+        assert processor.should_process_file(script) is True
+        assert processor.should_process_file(nested_script) is False
+        assert processor.should_process_file(other) is False
+        # Patterns with an extension still match by extension
+        assert processor.should_process_file(md_file) is True
+
     def test_include_paths(self, temp_dir, create_test_file, base_config):
         """Test include paths filtering."""
         # Create test files in different directories

@@ -198,7 +198,9 @@ projects:
 | `base_url` | string | Repository URL (HTTPS or SSH) | `https://github.com/org/repo.git` |
 | `branch` | string | Branch to process | `main` |
 | `token` | string | Authentication token | `${REPO_TOKEN}` |
-| `file_types` | list | File extensions to process | `["*.md", "*.py"]` |
+| `file_types` | list | File extensions or file name patterns to process | `["*.md", "*.py", "Makefile"]` |
+
+A `file_types` pattern with an extension (`*.md`, `.py`) matches every file with that extension. A pattern without one (`Makefile`, `Dockerfile*`, `bin/*`) is a case-insensitive glob: it matches the file name, or the path from the repository root when it contains a `/`.
 
 ### Path Filtering
 
