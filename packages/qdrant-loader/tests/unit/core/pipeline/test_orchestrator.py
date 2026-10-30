@@ -1160,6 +1160,61 @@ class TestPipelineOrchestrator:
         mock_log.warning.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_process_all_projects_finishes_other_projects_on_permanent_error(
+        self,
+    ):
+        """A PermanentJobError should not stop later projects, but is raised at the end."""
+        project_manager = Mock()
+        project_manager.list_project_ids.return_value = ["p1", "p2", "p3"]
+        orchestrator = PipelineOrchestrator(
+            self.settings, self.components, project_manager=project_manager
+        )
+        processed: list[str] = []
+
+        async def mock_process_documents(**kwargs):
+            project_id = kwargs["project_id"]
+            processed.append(project_id)
+            if project_id == "p3":
+                # Fails before any result exists, like the Qdrant preflight
+                orchestrator.last_pipeline_result = None
+                raise PermanentJobError("Qdrant collection is unavailable")
+            orchestrator.last_pipeline_result = Mock(
+                success_count=0 if project_id == "p2" else 1,
+                error_count=0 if project_id == "p2" else 1,
+                processed_document_count=1,
+                failed_document_count=0 if project_id == "p2" else 1,
+                total_size_bytes=10,
+                errors=[] if project_id == "p2" else [f"{project_id}-error"],
+            )
+            if project_id == "p2":
+                return 1
+            raise PermanentJobError("failed to index into Qdrant")
+
+        with patch.object(
+            orchestrator, "process_documents", side_effect=mock_process_documents
+        ):
+            with pytest.raises(PermanentJobError) as exc_info:
+                await orchestrator._process_all_projects()
+
+        assert processed == ["p1", "p2", "p3"]
+        assert str(exc_info.value) == (
+            "project_id=p1: failed to index into Qdrant; "
+            "project_id=p3: Qdrant collection is unavailable"
+        )
+        assert isinstance(exc_info.value.__cause__, PermanentJobError)
+
+        assert orchestrator.last_pipeline_result is not None
+        assert orchestrator.last_pipeline_result.success_count == 1
+        assert orchestrator.last_pipeline_result.error_count == 2
+        assert orchestrator.last_pipeline_result.processed_document_count == 2
+        assert orchestrator.last_pipeline_result.failed_document_count == 1
+        assert orchestrator.last_pipeline_result.errors == [
+            "p1-error",
+            "project_id=p3; error_type=PermanentJobError; "
+            "message=Qdrant collection is unavailable",
+        ]
+
+    @pytest.mark.asyncio
     async def test_process_all_projects_records_project_exception_in_aggregate_result(
         self,
     ):
