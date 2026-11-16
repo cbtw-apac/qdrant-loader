@@ -2,6 +2,12 @@
 
 Revision ID: 0007
 Revises: 0006
+
+Phase: expand; a marker with no operations
+Reversible: yes; there is nothing to undo
+Touches: nothing
+Locks: none
+Deploy: before the application release
 """
 
 revision = "0007"

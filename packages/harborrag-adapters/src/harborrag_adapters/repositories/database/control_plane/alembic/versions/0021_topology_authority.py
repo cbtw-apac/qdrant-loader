@@ -2,6 +2,14 @@
 
 Revision ID: 0021
 Revises: 0020
+
+Phase: expand, data and contract in one revision
+Reversible: yes; the downgrade drops the topology tables, their rows and
+            document_versions.source_scope_id
+Touches: document_versions (source_scope_id backfilled on every row, then NOT NULL); ten new
+         topology tables
+Locks: one UPDATE over every document_versions row, then a table lock to set NOT NULL
+Deploy: before the application release
 """
 
 from alembic import op
@@ -14,6 +22,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """Add document_versions.source_scope_id and create the topology tables."""
     op.add_column("document_versions", Column("source_scope_id", String(128), nullable=True))
     op.execute(
         text(
@@ -126,6 +135,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the topology tables and document_versions.source_scope_id."""
     for name in (
         "topology_resolution_snapshots",
         "topology_resolution_decisions",

@@ -3,6 +3,14 @@
 Revision ID: 0010
 Revises: 0009
 
+Phase: expand, with a data repair on legacy databases
+Reversible: partly; the downgrade drops agent_runs and keeps the conversation repair
+Touches: agent_runs (new); conversation_sessions and conversation_memory on legacy databases
+         only
+Locks: none on a current database; a legacy database rebuilds conversation_memory under a table
+       lock
+Deploy: before the application release
+
 Some development databases were stamped at revision 0009 by an earlier
 conversation-memory migration.  That schema had a required ``user_id``
 column and did not create ``conversation_sessions`` or its foreign key.  The
@@ -182,6 +190,7 @@ def _repair_legacy_conversation_memory() -> None:
 
 
 def upgrade() -> None:
+    """Repair a legacy conversation-memory schema, then create agent_runs."""
     _repair_legacy_conversation_memory()
     op.create_table(
         "agent_runs",
@@ -211,7 +220,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Drop agent checkpoints while retaining the data-safe 0009 repair."""
-
     op.drop_index(_IX_STATUS, table_name="agent_runs")
     op.drop_index(_IX_SESSION, table_name="agent_runs")
     op.drop_index(_IX_TENANT, table_name="agent_runs")

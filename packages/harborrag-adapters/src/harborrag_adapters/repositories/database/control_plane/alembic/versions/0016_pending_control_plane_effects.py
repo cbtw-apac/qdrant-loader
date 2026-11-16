@@ -6,6 +6,12 @@ drain retries and deletes the row on success (ML2 recoverability hardening).
 
 Revision ID: 0016
 Revises: 0015
+
+Phase: expand
+Reversible: yes; the downgrade drops the table and any queued effects
+Touches: pending_control_plane_effects (new)
+Locks: none
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ _TZDT = sa.DateTime(timezone=True)
 
 
 def upgrade() -> None:
+    """Create pending_control_plane_effects and its created_at index."""
     op.create_table(
         "pending_control_plane_effects",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -38,6 +45,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop pending_control_plane_effects and its index."""
     op.drop_index(
         "ix_pending_control_plane_effects_created_at",
         table_name="pending_control_plane_effects",

@@ -7,6 +7,12 @@ rows; this makes the keyset an index scan instead.
 
 Revision ID: 0019
 Revises: 0018
+
+Phase: expand
+Reversible: yes; the downgrade drops the index
+Touches: ingestion_tasks; index only
+Locks: writes to ingestion_tasks wait while the index builds
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ _INDEX_NAME = "ix_ingestion_tasks_tenant_submitted"
 
 
 def upgrade() -> None:
+    """Create the tenant and submission-time index on ingestion_tasks."""
     op.create_index(
         _INDEX_NAME,
         "ingestion_tasks",
@@ -30,4 +37,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the tenant and submission-time index."""
     op.drop_index(_INDEX_NAME, table_name="ingestion_tasks")

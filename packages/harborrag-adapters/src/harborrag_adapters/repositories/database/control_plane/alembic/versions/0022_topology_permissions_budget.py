@@ -2,6 +2,13 @@
 
 Revision ID: 0022
 Revises: 0021
+
+Phase: expand
+Reversible: yes; the downgrade drops the new tables with their rows and the new columns
+Touches: topology_jobs, topology_accepted, topology_resolution_snapshots (new columns with
+         defaults); nine new topology tables
+Locks: brief lock on each of the three altered tables to add or drop its columns
+Deploy: before the application release
 """
 
 from alembic import op
@@ -143,6 +150,7 @@ Index(
 
 
 def upgrade() -> None:
+    """Create the indexing, permission and budget tables and add their columns."""
     for table in METADATA.sorted_tables:
         table.create(op.get_bind())
     additions = (
@@ -164,6 +172,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the added columns, then the indexing, permission and budget tables."""
     with op.batch_alter_table("topology_resolution_snapshots") as batch:
         batch.drop_column("proofs")
     with op.batch_alter_table("topology_accepted") as batch:

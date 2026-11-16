@@ -3,6 +3,12 @@
 Revision ID: 0002
 Revises: 0001
 
+Phase: expand; a marker with no operations
+Reversible: yes; there is nothing to undo
+Touches: nothing
+Locks: none
+Deploy: before the application release
+
 The revision's DDL is included in the consolidated 0001 baseline.  Keeping
 the revision ID lets databases created before the consolidation upgrade to
 newer revisions without depending on stale bytecode.

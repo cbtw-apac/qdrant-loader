@@ -13,6 +13,15 @@ messages appended since the upgrade into it, then drops the message table.
 
 Revision ID: 0026
 Revises: 0025
+
+Phase: expand and data in one revision
+Reversible: partly; the downgrade re-pairs user and assistant messages and drops the attributes
+            a pair cannot hold
+Touches: conversation_messages (new, filled from every stored pair); conversation_memory renamed
+         conversation_memory_legacy
+Locks: copies every stored pair in one transaction; brief lock on conversation_memory to rename
+       it
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -68,7 +77,6 @@ def _legacy_table(name: str) -> sa.TableClause:
 
 def _aware(value: datetime) -> datetime:
     """SQLite hands back naive timestamps; the rows were always written as UTC."""
-
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
@@ -110,7 +118,6 @@ def _backfill_messages() -> None:
 
 def _pairs_from_messages(rows: Sequence[sa.Row[Any]]) -> list[dict[str, Any]]:
     """Re-pair post-upgrade user/assistant messages (oldest-first per session)."""
-
     pairs: list[dict[str, Any]] = []
     pending: dict[tuple[str, str, str], sa.Row[Any]] = {}
     for row in rows:
@@ -150,6 +157,7 @@ def _restore_pairs() -> None:
 
 
 def upgrade() -> None:
+    """Create conversation_messages, copy the stored pairs and retire the old table."""
     op.create_table(
         _TABLE,
         sa.Column("message_id", sa.String(length=128), nullable=False),
@@ -181,6 +189,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Restore conversation_memory from the messages and drop conversation_messages."""
     op.rename_table(_LEGACY_RENAMED, _LEGACY)
     _restore_pairs()
     op.drop_index(_INDEX, table_name=_TABLE)

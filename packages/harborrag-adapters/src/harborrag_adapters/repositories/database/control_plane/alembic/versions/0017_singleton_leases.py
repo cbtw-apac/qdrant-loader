@@ -7,6 +7,12 @@ progress bridge, already expired, so the first process to tick claims it.
 
 Revision ID: 0017
 Revises: 0016
+
+Phase: expand, with one seeded row
+Reversible: yes; the downgrade drops singleton_leases
+Touches: singleton_leases (new), one seeded row
+Locks: none
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ _SINGLETON_LEASES = sa.table(
 
 
 def upgrade() -> None:
+    """Create singleton_leases and seed the ingestion progress bridge lease."""
     op.create_table(
         "singleton_leases",
         sa.Column("name", sa.Text(), primary_key=True),
@@ -51,4 +58,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop singleton_leases."""
     op.drop_table("singleton_leases")

@@ -3,6 +3,14 @@
 Revision ID: 0045
 Revises: 0044
 
+Phase: contract, with deletes
+Reversible: no, because the downgrade restores the columns empty and the deleted rows are gone
+Touches: conversation_messages, completion_requests, memories, conversation_sessions,
+         model_usage
+Locks: the deletes run in one transaction, then a brief lock on each table to drop its columns;
+       writes to memories wait while its owner index rebuilds
+Deploy: after the application release
+
 The upgrade deletes tool messages, the replay claims of agent sessions,
 run-scoped memories and working memories, then drops their columns. Agent
 sessions themselves stay and list as chat. The downgrade restores the columns
@@ -25,6 +33,7 @@ _OWNER_WITH_RUN = [*_OWNER, "run_id"]
 
 
 def upgrade() -> None:
+    """Delete what only agent runs wrote, then drop its columns."""
     op.execute("DELETE FROM conversation_messages WHERE role = 'tool'")
     op.execute(
         "DELETE FROM completion_requests WHERE session_id IN "
@@ -47,6 +56,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Restore the dropped columns, empty."""
     with op.batch_alter_table("model_usage") as batch:
         batch.add_column(sa.Column("run_id", sa.String(length=128), nullable=True))
         batch.add_column(
