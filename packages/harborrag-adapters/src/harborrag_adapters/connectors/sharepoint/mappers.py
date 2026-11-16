@@ -31,11 +31,23 @@ def parse_timestamp(value: str | None) -> datetime | None:
 
 
 def drive_item_id_from_record(record: SourceRecord) -> str:
-    """Recover the Graph drive item ID from a source record."""
-    item_id = record.metadata.get("item_id") or record.locator
-    if not item_id:
-        raise ValueError(f"SourceRecord {record.id!r} does not contain item_id")
-    return str(item_id).rstrip("/").rsplit("/", 1)[-1]
+    """Recover the Graph drive item ID from a source record.
+
+    An ID in ``metadata["item_id"]`` is returned whole, so a malformed one
+    fails the endpoint builder's check instead of loading the item its last
+    segment names. Only a record without it falls back to the last segment of
+    its locator.
+
+    Args:
+        record: File record from discovery or built by a caller.
+
+    Returns:
+        The drive item ID, not yet checked as a URL path segment.
+
+    Raises:
+        ValueError: The record has neither ``metadata["item_id"]`` nor a locator.
+    """
+    return _graph_id_from_record(record, "item_id")
 
 
 def is_page_record(record: SourceRecord) -> bool:
@@ -46,11 +58,40 @@ def is_page_record(record: SourceRecord) -> bool:
 
 
 def page_id_from_record(record: SourceRecord) -> str:
-    """Recover the Graph site page ID from a page source record."""
-    page_id = record.metadata.get("page_id") or record.locator
-    if not page_id:
-        raise ValueError(f"SourceRecord {record.id!r} does not contain page_id")
-    return str(page_id).rstrip("/").rsplit("/", 1)[-1]
+    """Recover the Graph site page ID from a page source record.
+
+    An ID in ``metadata["page_id"]`` is returned whole, like the item ID of
+    ``drive_item_id_from_record``; only a record without it falls back to the
+    last segment of its locator.
+
+    Args:
+        record: Page record from discovery or built by a caller.
+
+    Returns:
+        The site page ID, not yet checked as a URL path segment.
+
+    Raises:
+        ValueError: The record has neither ``metadata["page_id"]`` nor a locator.
+    """
+    return _graph_id_from_record(record, "page_id")
+
+
+def _graph_id_from_record(record: SourceRecord, metadata_key: str) -> str:
+    """Return the record's explicit Graph ID whole, else the last segment of its locator.
+
+    Args:
+        record: Source record to read.
+        metadata_key: Metadata key that holds the explicit ID.
+
+    Raises:
+        ValueError: The record has neither the metadata ID nor a locator.
+    """
+    explicit_id = record.metadata.get(metadata_key)
+    if explicit_id:
+        return str(explicit_id)
+    if not record.locator:
+        raise ValueError(f"SourceRecord {record.id!r} does not contain {metadata_key}")
+    return str(record.locator).rstrip("/").rsplit("/", 1)[-1]
 
 
 def build_page_source_record(page: dict[str, Any], *, site_id: str) -> SourceRecord:

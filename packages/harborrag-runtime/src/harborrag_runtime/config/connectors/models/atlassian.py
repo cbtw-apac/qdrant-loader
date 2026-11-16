@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from harborrag_adapters.connectors.atlassian.query import is_cloud_hostname
+from harborrag_adapters.connectors.jira.query import narrow_jql
 
 from .common import PagedHttpTuning
 from .fields import Email, HttpsUrl, Secret, StrictModel, widget
@@ -175,6 +176,7 @@ JIRA = SourceTypeSpec(
     credential_renames={"api_token": "token"},
     endpoints=frozenset({"base_url"}),
     query_fields=frozenset({"jql"}),
+    query_narrowers={"jql": narrow_jql},
     aliases=("jira_cloud", "jira_datacenter"),
     setups=_setups("Jira", "https://acme.atlassian.net", "https://jira.acme.internal"),
 )

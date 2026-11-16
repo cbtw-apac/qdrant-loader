@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,8 @@ from harborrag_runtime.temporal.submission import (
     build_source_input,
 )
 from runtime_ingestion.connection_support import resolved_connection
+
+pytestmark = pytest.mark.unit
 
 _JIRA_CREDENTIALS = {
     "base_url": "https://jira.example.test",
@@ -47,7 +51,7 @@ def _submission(**changes: object) -> SourceSubmission:
         "connector_name": "docs",
     }
     values.update(changes)
-    return SourceSubmission(**values)  # type: ignore[arg-type]
+    return SourceSubmission(**values)  # type: ignore[arg-type]  # test overrides any field
 
 
 def test_submission_builds_deterministic_secret_free_source_identity(
@@ -141,6 +145,93 @@ def test_config_jql_reaches_the_query_but_editing_it_keeps_the_scope(tmp_path: P
     assert '"jql":"project = CPM"' in first.query.filters_json
     assert first.source_scope_id == second.source_scope_id
     assert first.configuration_fingerprint != second.configuration_fingerprint
+
+
+def test_run_jql_narrows_the_connection_jql_instead_of_replacing_it(tmp_path: Path) -> None:
+    source = build_source_input(
+        _settings(tmp_path),
+        _submission(query=SourceQuery(filters_json='{"jql":"project = HR"}')),
+        connection=_jira(config={"jql": "project = CPM"}),
+    )
+
+    assert json.loads(source.query.filters_json)["jql"] == "(project = CPM) and (project = HR)"
+
+
+def test_an_empty_run_jql_keeps_the_connection_jql(tmp_path: Path) -> None:
+    source = build_source_input(
+        _settings(tmp_path),
+        _submission(query=SourceQuery(filters_json='{"jql":""}')),
+        connection=_jira(config={"jql": "project = CPM"}),
+    )
+
+    assert json.loads(source.query.filters_json)["jql"] == "project = CPM"
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param({"jql": "project = CPM"}, id="connection-jql"),
+        pytest.param({}, id="no-connection-jql"),
+    ],
+)
+def test_an_empty_run_jql_gets_the_scope_of_a_run_without_jql(
+    tmp_path: Path, config: dict[str, Any]
+) -> None:
+    settings = _settings(tmp_path)
+    empty_jql = _submission(query=SourceQuery(filters_json='{"jql":""}'))
+    own_jql = _submission(query=SourceQuery(filters_json='{"jql":"status = Done"}'))
+
+    omitted = build_source_input(settings, _submission(), connection=_jira(config=config))
+    empty = build_source_input(settings, empty_jql, connection=_jira(config=config))
+    narrowed = build_source_input(settings, own_jql, connection=_jira(config=config))
+
+    assert empty.source_scope_id == omitted.source_scope_id
+    assert narrowed.source_scope_id != omitted.source_scope_id
+
+
+def test_run_filter_without_a_source_type_narrower_is_rejected(tmp_path: Path) -> None:
+    connection = _jira(config={"jql": "project = CPM"})
+    without_narrower = replace(connection, spec=replace(connection.spec, query_narrowers={}))
+
+    with pytest.raises(ConnectorConfigurationError, match="can only narrow"):
+        prepare_source_submission(
+            _settings(tmp_path),
+            _submission(query=SourceQuery(filters_json='{"jql":"project = HR"}')),
+            connection=without_narrower,
+        )
+
+
+@pytest.mark.parametrize(
+    "filters_json",
+    [
+        pytest.param('{"jql":"x = 1) or (project = HR"}', id="jql-closes-its-group"),
+        pytest.param('{"jql":["project = HR"]}', id="jql-not-a-string"),
+    ],
+)
+def test_run_jql_that_cannot_narrow_the_connection_jql_is_rejected(
+    tmp_path: Path, filters_json: str
+) -> None:
+    with pytest.raises(ConnectorConfigurationError, match="jql"):
+        prepare_source_submission(
+            _settings(tmp_path),
+            _submission(query=SourceQuery(filters_json=filters_json)),
+            connection=_jira(config={"jql": "project = CPM"}),
+        )
+
+
+def test_editing_the_connection_jql_keeps_the_scope_of_a_run_with_its_own_jql(
+    tmp_path: Path,
+) -> None:
+    run = _submission(query=SourceQuery(filters_json='{"jql":"status = Done"}'))
+
+    first = build_source_input(
+        _settings(tmp_path), run, connection=_jira(config={"jql": "project = CPM"})
+    )
+    second = build_source_input(
+        _settings(tmp_path), run, connection=_jira(config={"jql": "project = HR"})
+    )
+
+    assert first.source_scope_id == second.source_scope_id
 
 
 def test_non_secret_connection_change_updates_configuration_fingerprint(

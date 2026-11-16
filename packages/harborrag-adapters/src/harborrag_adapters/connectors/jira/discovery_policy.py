@@ -1,4 +1,12 @@
-"""Jira query translation, source policy, and scope validation."""
+"""Jira discovery policy: which issues a query may reach and what each record carries.
+
+Owns the connection's project boundary. Query filters may narrow the configured
+projects but never leave them, and every fetched issue is checked against them
+again, so neither raw JQL nor an explicit key can pull another project's issues in.
+The only request made here is the permission probe behind an empty search.
+
+Start from: JiraDiscoveryPolicy, issue_keys_from_query, verify_empty_search_result.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +30,16 @@ from .query import build_jql, validate_issue_key
 
 
 def issue_keys_from_query(query: ConnectorQuery) -> list[str]:
+    """Return the explicit issue keys a query asks for, validated.
+
+    The ``ValueError`` of ``validate_issue_key`` passes through for a malformed key.
+
+    Args:
+        query: Discovery query whose ``issue_keys`` or ``keys`` filter names issues.
+
+    Returns:
+        The validated keys; empty when the query names none.
+    """
     values = query.filters.get("issue_keys") or query.filters.get("keys")
     if values is None:
         return []
@@ -31,19 +49,59 @@ def issue_keys_from_query(query: ConnectorQuery) -> list[str]:
 
 
 class JiraDiscoveryPolicy:
+    """Bound Jira discovery to the configured projects and shape its records.
+
+    Args:
+        config: The connection's validated Jira configuration.
+        base_url: Jira base URL that issue links are built from.
+    """
+
     def __init__(self, config: JiraProjectConfig, *, base_url: str) -> None:
         self._config = config
         self._base_url = base_url
 
     def effective_project_keys(self, query: ConnectorQuery) -> list[str]:
-        """Return the project scope a search is bounded to, filters over config default."""
+        """Return the projects a search is bounded to.
+
+        A query's ``project_keys``, ``project_key`` or path narrows the configured
+        projects; without one, the configured projects apply. A connection that
+        configures no projects leaves the query free to name any.
+
+        Args:
+            query: Discovery query.
+
+        Returns:
+            The project keys the search must stay inside; empty for no bound.
+
+        Raises:
+            ValueError: The query names a project outside the configured ones.
+        """
         filters = query.filters
-        return normalized_string_list(
-            filters.get("project_keys") or filters.get("project_key") or query.path,
-            default=self._config.project_keys,
+        requested = normalized_string_list(
+            filters.get("project_keys") or filters.get("project_key") or query.path or None,
+            default=[],
         )
+        if not requested:
+            return list(self._config.project_keys)
+        if self._config.project_keys and not set(requested) <= set(self._config.project_keys):
+            raise ValueError(
+                "Jira query projects must stay inside the configured connection projects"
+            )
+        return requested
 
     def jql(self, query: ConnectorQuery) -> str:
+        """Build the JQL search for one discovery query, bounded to its projects.
+
+        Unset filters fall back to the configured issue types, statuses and labels.
+        The ``ValueError`` of ``effective_project_keys`` or ``build_jql`` passes
+        through for a project outside the configured ones or unsafe raw JQL.
+
+        Args:
+            query: Discovery query.
+
+        Returns:
+            The JQL search.
+        """
         filters = query.filters
         return build_jql(
             project_keys=self.effective_project_keys(query),
@@ -65,6 +123,19 @@ class JiraDiscoveryPolicy:
         )
 
     def record_for_key(self, issue_key: str, query: ConnectorQuery) -> SourceRecord:
+        """Build the discovery record for one explicit issue key.
+
+        The ``ValueError`` of ``validate_issue_key`` passes through for a malformed
+        key, and the ``DocumentProcessingError`` of the project check for a key in a
+        project outside the configured ones.
+
+        Args:
+            issue_key: Issue key such as ``ENG-123``.
+            query: Discovery query whose per-record options the record carries.
+
+        Returns:
+            The record, with the query's attachment, comment and graph options applied.
+        """
         issue_key = validate_issue_key(issue_key)
         project_key = issue_key.split("-", 1)[0]
         self._check_project_scope(project_key, issue_key)
@@ -85,6 +156,15 @@ class JiraDiscoveryPolicy:
 
     @staticmethod
     def apply_query(record: SourceRecord, query: ConnectorQuery) -> SourceRecord:
+        """Copy a query's per-record options onto a discovery record.
+
+        Args:
+            record: Record to update in place.
+            query: Discovery query carrying the attachment, comment and graph options.
+
+        Returns:
+            The same record.
+        """
         record.metadata["include_attachments"] = query.include_attachments
         record.metadata["include_comments"] = bool(query.filters.get("include_comments", True))
         record.metadata["build_graph"] = bool(query.filters.get("build_graph", True))
@@ -94,6 +174,16 @@ class JiraDiscoveryPolicy:
         return record
 
     def validate_issue(self, issue: dict[str, Any], issue_key: str) -> None:
+        """Fail fast on an issue payload that is malformed or outside the configured projects.
+
+        Args:
+            issue: Issue payload from the Jira search or issue API.
+            issue_key: Key the issue is reported under in errors.
+
+        Raises:
+            DocumentProcessingError: The payload lacks its id, key or summary, or the
+                issue belongs to a project outside the configured ones.
+        """
         fields = issue.get("fields", {})
         missing = [
             name
@@ -111,6 +201,7 @@ class JiraDiscoveryPolicy:
         self._check_project_scope(fields.get("project", {}).get("key"), issue_key)
 
     def _check_project_scope(self, project_key: str | None, issue_key: str) -> None:
+        """Raise ``DocumentProcessingError`` when an issue's project is not configured."""
         if self._config.project_keys and project_key not in self._config.project_keys:
             raise DocumentProcessingError(
                 f"JIRA issue {issue_key} belongs to project {project_key!r}, "
@@ -127,23 +218,28 @@ def verify_empty_search_result(
 ) -> None:
     """Rule out a permission gap behind a zero-issue search result.
 
-    `JiraConnector.connect()` only proves the credential holds a valid session; it
-    can't catch a credential that authenticates fine but lacks
-    BROWSE_PROJECTS on the project(s) actually being searched, since
-    Jira's search returns HTTP 200 with an empty result set for that
-    case instead of an error. Checked here, once per empty result,
-    rather than eagerly in `connect()`, because the permission scope is
-    per-query (``project_keys``/``project_key``/path filters), not
-    knowable until the query is in hand.
+    ``JiraConnector.connect()`` only proves the credential holds a valid session; it
+    cannot catch a credential that authenticates fine but lacks BROWSE_PROJECTS on
+    the projects actually searched, because Jira's search answers that case with
+    HTTP 200 and an empty result set instead of an error. The check runs here, once
+    per empty result, rather than eagerly in ``connect()``, because the projects are
+    per query (``project_keys``, ``project_key`` or path filters).
 
-    Raises only on a definitive ``havePermission: false`` -- a valid
-    credential that lacks scope, which is an authorization failure, not an
-    authentication one; a real bad credential still surfaces via the shared
-    client's own 401/403 handling on this same call. If the probe itself is
-    inconclusive (a `FetchError` -- endpoint disabled, unrecognized
-    permission key, transient failure), the empty result stands as-is rather
-    than turning every genuinely-empty project into a false-positive
-    authorization failure.
+    Only a definitive ``havePermission: false`` raises: a valid credential that lacks
+    scope is an authorization failure, not an authentication one, and a truly bad
+    credential still surfaces through the shared client's 401/403 handling on this
+    call. An inconclusive probe (a ``FetchError``: endpoint disabled, unknown
+    permission key, transient failure) leaves the empty result standing, so a
+    genuinely empty project is never reported as an authorization failure.
+
+    Args:
+        query: The query whose search came back empty.
+        policy: Policy that bounded the search to its projects.
+        issues: Issue API that runs the permission probe.
+        logger_: Logger that records an inconclusive probe.
+
+    Raises:
+        AuthorizationError: The credential lacks BROWSE_PROJECTS on every searched project.
     """
     project_keys = policy.effective_project_keys(query)
     if not project_keys:

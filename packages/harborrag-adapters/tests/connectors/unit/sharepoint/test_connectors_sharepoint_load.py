@@ -18,29 +18,39 @@ from harborrag_core.domain.source import SourceRecord
 
 pytestmark = [pytest.mark.unit, pytest.mark.graybox]
 
+_DOWNLOAD_URL = "@microsoft.graph.downloadUrl"
+_UNSAFE_ITEM_IDS = ("..", "a?b", "a:b", "a%2F..", "file1\n", "bad/file1")
 
-def test_load_downloads_file_content_and_builds_metadata():
-    client = FakeGraphClient()
-    client.add("drives/drive1/items/file1", file_item("file1", "Guide.docx"))
-    client.downloads["drives/drive1/items/file1/content"] = b"docx-bytes"
-    connector = SharePointConnector(
+
+def _site_id_connector(client: FakeGraphClient, **overrides: object) -> SharePointConnector:
+    return SharePointConnector(
         SharePointSiteConfig(
             site_id="site1",
             drive_id="drive1",
             access_token="token",
             requests_per_minute=6000,
+            **overrides,
         ),
         client=client,
     )
 
-    document = connector.load(
-        SourceRecord(
-            "sharepoint://site1/drive1/file1",
-            "application/octet-stream",
-            "file1",
-            metadata={"drive_id": "drive1", "item_id": "file1"},
-        )
+
+def _file_record(item_id: str = "file1", drive_id: str = "drive1") -> SourceRecord:
+    return SourceRecord(
+        f"sharepoint://site1/{drive_id}/{item_id}",
+        "application/octet-stream",
+        item_id,
+        metadata={"drive_id": drive_id, "item_id": item_id},
     )
+
+
+def test_load_file_record_downloads_content_with_metadata() -> None:
+    client = FakeGraphClient()
+    client.add("drives/drive1/items/file1", file_item("file1", "Guide.docx"))
+    client.downloads["drives/drive1/items/file1/content"] = b"docx-bytes"
+    connector = _site_id_connector(client)
+
+    document = connector.load(_file_record())
 
     assert document.id == "sharepoint://site1/drive1/file1"
     assert document.content == b"docx-bytes"
@@ -59,63 +69,34 @@ def test_load_downloads_file_content_and_builds_metadata():
     assert client.byte_calls == ["drives/drive1/items/file1/content"]
 
 
-_DOWNLOAD_URL = "@microsoft.graph.downloadUrl"
-
-
-def test_load_never_requests_the_pre_authenticated_download_url():
+def test_load_file_record_never_selects_download_url() -> None:
     """Graph's ``downloadUrl`` ignores SharePoint permissions for about an hour."""
-
     client = FakeGraphClient()
     client.add("drives/drive1/items/file1", file_item("file1", "Guide.docx"))
     client.downloads["drives/drive1/items/file1/content"] = b"docx-bytes"
-    connector = SharePointConnector(
-        SharePointSiteConfig(
-            site_id="site1", drive_id="drive1", access_token="token", requests_per_minute=6000
-        ),
-        client=client,
-    )
+    connector = _site_id_connector(client)
 
-    connector.load(
-        SourceRecord(
-            "sharepoint://site1/drive1/file1",
-            "application/octet-stream",
-            "file1",
-            metadata={"drive_id": "drive1", "item_id": "file1"},
-        )
-    )
+    connector.load(_file_record())
 
     selects = [str((params or {}).get("$select", "")) for _, params in client.calls]
     assert selects and all(_DOWNLOAD_URL not in select for select in selects)
 
 
-def test_load_drops_graph_annotations_from_the_stored_payload():
+def test_load_annotated_item_drops_annotations_from_raw() -> None:
     """``raw`` is written to the immutable raw-metadata artifact as is.
 
     Graph can still return the pre-authenticated ``downloadUrl`` (an endpoint
     without ``$select``), so it is removed from the payload, not just unrequested.
     """
-
     item = file_item("file1", "Guide.docx")
     item[_DOWNLOAD_URL] = "https://tenant.sharepoint.com/_layouts/15/download.aspx?tempauth=x"
     item["@odata.etag"] = '"etag"'
     client = FakeGraphClient()
     client.add("drives/drive1/items/file1", item)
     client.downloads["drives/drive1/items/file1/content"] = b"docx-bytes"
-    connector = SharePointConnector(
-        SharePointSiteConfig(
-            site_id="site1", drive_id="drive1", access_token="token", requests_per_minute=6000
-        ),
-        client=client,
-    )
+    connector = _site_id_connector(client)
 
-    document = connector.load(
-        SourceRecord(
-            "sharepoint://site1/drive1/file1",
-            "application/octet-stream",
-            "file1",
-            metadata={"drive_id": "drive1", "item_id": "file1"},
-        )
-    )
+    document = connector.load(_file_record())
 
     assert document.raw is not None
     assert _DOWNLOAD_URL not in document.raw
@@ -123,85 +104,138 @@ def test_load_drops_graph_annotations_from_the_stored_payload():
     assert document.raw["id"] == "file1"
 
 
-def test_load_rejects_oversized_files_before_download():
+def test_load_oversized_file_raises_before_download() -> None:
     client = FakeGraphClient()
     client.add("drives/drive1/items/file1", file_item("file1", "Guide.docx", size=99))
-    connector = SharePointConnector(
-        SharePointSiteConfig(
-            site_id="site1",
-            drive_id="drive1",
-            access_token="token",
-            max_file_size_bytes=10,
-            requests_per_minute=6000,
-        ),
-        client=client,
-    )
+    connector = _site_id_connector(client, max_file_size_bytes=10)
 
     with pytest.raises(DocumentProcessingError, match="max_file_size_bytes"):
-        connector.load(
-            SourceRecord(
-                "sharepoint://site1/drive1/file1",
-                "application/octet-stream",
-                "file1",
-                metadata={"drive_id": "drive1", "item_id": "file1"},
-            )
-        )
+        connector.load(_file_record())
     assert client.byte_calls == []
 
 
-def test_load_rejects_record_drive_id_outside_configured_drive():
+def test_load_record_drive_outside_scope_raises_before_any_request() -> None:
+    """The drive scope check rejects the record before any Graph call for the item."""
     client = FakeGraphClient()
-    connector = SharePointConnector(
-        SharePointSiteConfig(
-            site_id="site1",
-            drive_id="drive1",
-            access_token="token",
-            requests_per_minute=6000,
-        ),
-        client=client,
-    )
+    connector = _site_id_connector(client)
 
     with pytest.raises(DocumentProcessingError, match="outside configured drive"):
-        connector.load(
-            SourceRecord(
-                "sharepoint://site1/other-drive/file1",
-                "application/octet-stream",
-                "file1",
-                metadata={"drive_id": "other-drive", "item_id": "file1"},
-            )
-        )
-    # The scope check must reject before any Graph call is made for the item.
+        connector.load(_file_record(drive_id="other-drive"))
     assert client.calls == []
     assert client.byte_calls == []
 
 
-def test_load_rejects_folders():
+def test_load_folder_record_raises() -> None:
     client = FakeGraphClient()
     client.add("drives/drive1/items/folder1", folder_item())
-    connector = SharePointConnector(
-        SharePointSiteConfig(
-            site_id="site1",
-            drive_id="drive1",
-            access_token="token",
-            requests_per_minute=6000,
-        ),
-        client=client,
-    )
+    connector = _site_id_connector(client)
 
     with pytest.raises(DocumentProcessingError, match="not a downloadable file"):
         connector.load(SourceRecord("sharepoint://site1/drive1/folder1", "folder", "folder1"))
 
 
-def test_load_by_ids_loads_each_item():
+@pytest.mark.parametrize("item_id", _UNSAFE_ITEM_IDS)
+def test_load_record_with_unsafe_item_id_raises_before_any_request(item_id: str) -> None:
+    client = FakeGraphClient()
+    connector = _site_id_connector(client)
+
+    with pytest.raises(ValueError, match="drive item ID"):
+        connector.load(_file_record(item_id))
+    assert client.calls == []
+    assert client.byte_calls == []
+
+
+def test_load_record_outside_root_path_raises_before_download() -> None:
+    item = file_item("file1", "A.docx")
+    item["parentReference"]["path"] = "/drive/root:/Secrets"
+    client = FakeGraphClient()
+    client.add("drives/drive1/items/file1", item)
+    client.downloads["drives/drive1/items/file1/content"] = b"bytes-a"
+    connector = _site_id_connector(client, root_path="Docs")
+
+    with pytest.raises(ValueError, match="item must stay inside the configured root path"):
+        connector.load(_file_record())
+    assert client.byte_calls == []
+
+
+def test_load_opaque_graph_item_id_downloads_its_content() -> None:
+    item_id = "01BYE5RZ6QN3ZWBTUFOFD3GSPGOHDJD36K"
+    client = FakeGraphClient()
+    client.add(f"drives/drive1/items/{item_id}", file_item(item_id, "Guide.docx"))
+    client.downloads[f"drives/drive1/items/{item_id}/content"] = b"docx-bytes"
+    connector = _site_id_connector(client)
+
+    document = connector.load(_file_record(item_id))
+
+    assert document.content == b"docx-bytes"
+    assert client.byte_calls == [f"drives/drive1/items/{item_id}/content"]
+
+
+def test_load_by_ids_valid_ids_loads_each_item() -> None:
+    """The item is fetched once to build its record and again to confirm it is still a file."""
     client = FakeGraphClient()
     add_site_and_default_drive(client)
-    # record_for_item_id() fetches the item once to build the record, then
-    # load() fetches it again to confirm it's still a file before downloading.
     client.add(
         "drives/drive1/items/file1",
         file_item("file1", "A.docx"),
         file_item("file1", "A.docx"),
     )
+    client.downloads["drives/drive1/items/file1/content"] = b"bytes-a"
+    connector = SharePointConnector(config(), client=client)
+
+    documents = list(connector.load_by_ids(["file1"]))
+
+    assert [d.content for d in documents] == [b"bytes-a"]
+
+
+@pytest.mark.parametrize("item_id", ["../../../sites/site2/drive/root", "folder1/..", "a?b"])
+def test_load_by_ids_unsafe_item_id_raises_before_item_request(item_id: str) -> None:
+    client = FakeGraphClient()
+    add_site_and_default_drive(client)
+    connector = SharePointConnector(config(), client=client)
+
+    with pytest.raises(ValueError, match="drive item ID"):
+        list(connector.load_by_ids([item_id]))
+    assert not any("/items/" in endpoint for endpoint, _ in client.calls)
+    assert client.byte_calls == []
+
+
+def test_load_by_ids_item_inside_root_path_loads_it() -> None:
+    client = FakeGraphClient()
+    add_site_and_default_drive(client)
+    client.add(
+        "drives/drive1/items/file1",
+        file_item("file1", "A.docx"),
+        file_item("file1", "A.docx"),
+    )
+    client.downloads["drives/drive1/items/file1/content"] = b"bytes-a"
+    connector = SharePointConnector(config(root_path="Docs"), client=client)
+
+    documents = list(connector.load_by_ids(["file1"]))
+
+    assert [d.content for d in documents] == [b"bytes-a"]
+
+
+def test_load_by_ids_item_outside_root_path_raises_before_download() -> None:
+    item = file_item("file1", "A.docx")
+    item["parentReference"]["path"] = "/drive/root:/Secrets"
+    client = FakeGraphClient()
+    add_site_and_default_drive(client)
+    client.add("drives/drive1/items/file1", item)
+    client.downloads["drives/drive1/items/file1/content"] = b"bytes-a"
+    connector = SharePointConnector(config(root_path="Docs"), client=client)
+
+    with pytest.raises(ValueError, match="item must stay inside the configured root path"):
+        list(connector.load_by_ids(["file1"]))
+    assert client.byte_calls == []
+
+
+def test_load_by_ids_without_root_path_loads_item_from_any_folder() -> None:
+    item = file_item("file1", "A.docx")
+    item["parentReference"]["path"] = "/drive/root:/Secrets"
+    client = FakeGraphClient()
+    add_site_and_default_drive(client)
+    client.add("drives/drive1/items/file1", item, item)
     client.downloads["drives/drive1/items/file1/content"] = b"bytes-a"
     connector = SharePointConnector(config(), client=client)
 

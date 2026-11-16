@@ -1,16 +1,13 @@
-"""Let a question about a whole source entity reach that entity's evidence.
+"""Entity-summary search for questions about a whole source entity.
 
-Chunk search answers "find the sentence about Kubernetes". It answers "which
-candidates cleared the second round and have banking experience" badly, because
-that answer is spread across an issue's body, its comments and an attached CV --
-three documents, no single chunk. The source-entity summary is the object such a
-question is really about, so it is searched first and then expanded back into the
-ordinary evidence chunks that can be cited.
+Nothing is served from a summary point itself. The summary authority decides,
+per request, which cards and evidence chunks a caller may read, and those chunks
+go through the same permission checks as every other candidate.
 
-Nothing is served from the summary point itself. It yields a node key; the
-summary authority decides, per request, whether that binding is readable and
-current, and answers with chunk identities. Those chunks then go through the same
-permission validation and loading as every other candidate.
+Typical usage example:
+
+    search = EntitySummarySearch(summaries, vectors, profile)
+    response = await search.find(request, request_id, dense_vector, context)
 """
 
 from __future__ import annotations
@@ -38,7 +35,7 @@ from harborrag_core.ingestion import DocumentIdentityBuilder
 from harborrag_core.ports.storage import VectorRepositoryPort
 from harborrag_core.ports.summary_projection import SummaryReaderPort
 from harborrag_core.storage import StorageOperationContext
-from harborrag_core.summaries import FACET_NAME_PATTERN, SummaryCard
+from harborrag_core.summaries import FACET_NAME_PATTERN, SummaryCard, SummaryView
 from harborrag_core.topology.derived import (
     ENTITY_SUMMARY_RECORD_KIND,
     ContextualIndexProfile,
@@ -49,13 +46,18 @@ from .source_fields import PayloadIndexCatalog
 
 _MAX_ENTITIES = 8
 _MAX_CHUNKS_PER_ENTITY = 8
-# With facet filters the lane is doing selection, not enrichment: the caller has
-# said which entities count, so the ceiling is how many of them we will rank.
 _MAX_SELECTED_ENTITIES = 50
+"""Entities ranked when facet filters select rather than enrich.
+
+The caller has said which entities count, so this is how many of them are ranked.
+"""
 FACET_FILTER_PREFIX = "facet."
-# A facet named that no source scope declared: the filter cannot match anything,
-# so the empty answer it produces is not a conclusive one.
 UNKNOWN_FACET = "unknown_facet"
+"""Reason code for a facet no source scope declared.
+
+A filter on it cannot match anything, so the empty answer it produces is not a
+conclusive one.
+"""
 _FACET_NAME = re.compile(FACET_NAME_PATTERN)
 
 
@@ -70,13 +72,24 @@ _RANGE_OPERATORS = {
 def facet_filter_from_mapping(
     facets: Mapping[str, object], source_scope_ids: tuple[str, ...] = ()
 ) -> VectorFilter | None:
-    """Turn ``{"stage": "round 2", "years": {"gte": 5}}`` into entity-point conditions.
+    """Build the entity-point filter for facet values and source scopes.
 
     Text facet values are matched case-folded, the way they were stored, so a
     caller's ``Java`` finds a card's ``java``. A name that no scope could have
     declared (``Skill Set`` instead of ``skill_set``) is refused, not searched.
-    """
 
+    Args:
+        facets: Facet name to a value, a list of values (any one matches), or a
+            mapping of range bounds (``gte``, ``gt``, ``lte``, ``lt``) to numbers.
+        source_scope_ids: Source scopes the entities must belong to. Empty means any.
+
+    Returns:
+        The entity-point filter, or None when there is nothing to filter on.
+
+    Raises:
+        ValueError: A facet name is malformed, or a range bound is unsupported or
+            not a number.
+    """
     must: list[VectorFilterCondition] = []
     for name, value in sorted(facets.items()):
         if not _FACET_NAME.fullmatch(name):
@@ -116,7 +129,6 @@ def _folded(value: object) -> object:
 
 def _folded_condition(condition: VectorFilterCondition) -> VectorFilterCondition:
     """Fold a ``facet.*`` condition's text the way ``facet_filter_from_mapping`` does."""
-
     value = condition.value
     folded = (
         [_folded(item) for item in value] if isinstance(value, list | tuple) else _folded(value)
@@ -126,10 +138,36 @@ def _folded_condition(condition: VectorFilterCondition) -> VectorFilterCondition
 
 @dataclass(frozen=True)
 class EntityHit:
+    """One ranked entity point, for routing and not yet cleared to be shown.
+
+    Attributes:
+        node_key: Graph node key of the source entity the point summarises.
+        source_scope_id: Source scope of the entity, or None when unrecorded.
+        score: Similarity of the point to the query vector.
+        coverage_mode: How much of the entity the summary covers, or None when unrecorded.
+    """
+
     node_key: str
     source_scope_id: str | None
     score: float
     coverage_mode: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ReleasedHit:
+    """A ranked hit with the card and evidence the authority released for it.
+
+    Attributes:
+        hit: The ranked entity point.
+        card: The released summary card.
+        coverage_mode: How much of the entity the released view covers.
+        chunks: Released evidence chunk ids, best first.
+    """
+
+    hit: EntityHit
+    card: SummaryCard
+    coverage_mode: str | None
+    chunks: tuple[str, ...]
 
 
 def split_facet_filters(
@@ -137,14 +175,16 @@ def split_facet_filters(
 ) -> tuple[VectorFilter | None, VectorFilter | None]:
     """Separate ``facet.*`` conditions from the ones meant for evidence payloads.
 
-    The two address different points -- an entity's facets live on its summary
-    point, everything else on chunks -- so one filter object has to be routed to
-    two searches. Returns ``(facet_filter, remaining_filter)``, each ``None`` when
-    it has no conditions. Facet text is case-folded on the way, as it was stored,
-    so ``facet.stage == "Round 2"`` matches here exactly as it does in
-    ``find_entities``.
-    """
+    Facets live on entity summary points and everything else on chunks, so one
+    filter has to be routed to two searches. Facet text is case-folded as it was
+    stored, so it matches here exactly as it does in ``find_entities``.
 
+    Args:
+        filters: The caller's filter, or None.
+
+    Returns:
+        ``(facet_filter, remaining_filter)``, each None when it has no conditions.
+    """
     if filters is None:
         return None, None
     facet: dict[str, list[VectorFilterCondition]] = {"must": [], "should": [], "must_not": []}
@@ -163,7 +203,17 @@ def split_facet_filters(
 
 @dataclass(frozen=True)
 class EntitySummarySearch:
-    """Search accepted source-entity cards and return the evidence behind them."""
+    """Search accepted source-entity cards and return the evidence behind them.
+
+    Attributes:
+        summaries: Summary authority that releases cards and evidence per caller.
+        vectors: Vector repository holding the entity index and evidence points.
+        profile: Index profile naming the entity index and its embedding.
+        max_entities: Entities ranked without a facet filter, unless a limit is given.
+        max_chunks_per_entity: Evidence chunks taken from each entity.
+        entity_weight: Fusion weight of entity-reached evidence against chunk candidates.
+        rrf_constant: Reciprocal-rank-fusion constant.
+    """
 
     summaries: SummaryReaderPort
     vectors: VectorRepositoryPort
@@ -182,31 +232,30 @@ class EntitySummarySearch:
         facet_filter: VectorFilter | None = None,
         chunk_filter: VectorFilter | None = None,
     ) -> tuple[VectorSearchResult, ...]:
-        """Fuse entity-reached evidence into the candidate set -- or replace it.
+        """Fuse entity-reached evidence into the candidates, or replace them.
 
-        Without facet filters this is enrichment: entity hits join the chunk
-        candidates by rank fusion. With them it is selection: the caller has said
-        which entities qualify, so only evidence from qualifying entities may be
-        returned, and the chunk candidates are set aside.
+        Without ``facet_filter``, evidence from the top-ranked entities joins the
+        candidates by rank fusion. With it, only evidence from qualifying entities
+        is returned. When no evidence is reached, enrichment returns the
+        candidates unchanged and selection returns nothing.
 
-        ``chunk_filter`` is the rest of the caller's filter -- scope, type, dates,
-        the items a ``fields.*`` filter traced. Entity-reached evidence must meet
-        it like every other candidate: reaching a chunk through its entity is not
-        a way around what the caller asked for.
+        Args:
+            candidates: Candidates from chunk search, best first.
+            dense_vector: Query embedding, or None when the query has none.
+            context: Storage context of the caller's request.
+            facet_filter: ``facet.*`` conditions that select entities, or None to enrich.
+            chunk_filter: The caller's other conditions. Reached evidence must meet
+                them too, and their scope conditions also narrow the entity ranking.
 
-        Returns the input unchanged on every path that cannot be served safely,
-        so a missing index, an empty vector or an unreadable binding degrades to
-        plain chunk retrieval instead of failing the request.
+        Returns:
+            The fused candidates, or the selected evidence when ``facet_filter`` is set.
         """
-
         if dense_vector is None or len(dense_vector) != self.profile.dimension:
             return candidates if facet_filter is None else ()
         node_keys = await self.matching_entities(
             dense_vector,
             context,
             _with_scope_conditions(facet_filter, chunk_filter),
-            # The scope conditions narrow the ranking; they do not turn
-            # enrichment into selection, so the mode's own ceiling stays.
             limit=_MAX_SELECTED_ENTITIES if facet_filter is not None else self.max_entities,
         )
         reached = tuple(
@@ -234,7 +283,6 @@ class EntitySummarySearch:
         limit: int | None = None,
     ) -> tuple[str, ...]:
         """Rank entity node keys by similarity, within the facet filter if any."""
-
         return tuple(
             hit.node_key
             for hit in await self.ranked_entities(dense_vector, context, facet_filter, limit=limit)
@@ -250,11 +298,9 @@ class EntitySummarySearch:
     ) -> tuple[EntityHit, ...]:
         """Rank entity points by similarity, within the facet filter if any.
 
-        Returns routing data only. Whether any of it may be *shown* is the summary
-        authority's call, made per request by the caller that holds the access.
-        A missing index ranks nothing here; ``find`` is where that is reported.
+        The hits are routing data only. The summary authority decides, per request,
+        whether any of them may be shown. A missing entity index ranks nothing.
         """
-
         return await self._rank(dense_vector, context, facet_filter, limit=limit) or ()
 
     async def find(
@@ -264,21 +310,25 @@ class EntitySummarySearch:
         dense_vector: tuple[float, ...],
         context: StorageOperationContext,
     ) -> EntityFindResponse:
-        """Answer ``find_entities``: rank entity points, keep what the authority releases.
+        """Rank entity points and return the matches the summary authority releases.
 
-        Three different situations used to produce the same empty, *complete*
-        answer -- no index published for this tenant, nothing matched, and hits
-        whose cards the authority would not release -- so a caller could not tell
-        "the corpus has no such candidate" from "entity search cannot answer yet;
-        use chunk search". They are told apart here with reason codes.
+        Hits the authority withholds are counted only on a tenant-shared corpus.
+        Under source ACLs they stay silent, because a count would reveal how many
+        hidden entities match. There the answer is marked truncated only when more
+        than ``limit`` hits were released, so it may omit visible matches ranked
+        further down without saying so.
 
-        Released-nothing hits are counted only for a tenant-shared corpus. There
-        every principal reads every released card, so a withheld hit can only mean
-        a card not yet written or gone stale. Under source ACLs the same count
-        would tell a principal how many entities they may not see match their
-        facets, so those hits stay silently absent, as the authority intends.
+        Args:
+            request: The caller's access, query, facets, source scopes and limit.
+            request_id: Identifier echoed on the response.
+            dense_vector: Query embedding, in the entity index's dimension.
+            context: Storage context the entity index is searched under.
+
+        Returns:
+            At most ``request.limit`` released matches in rank order, with the
+            truncation flag, reason codes such as a missing entity index and, on a
+            tenant-shared corpus, the number of withheld hits.
         """
-
         facet_filter = facet_filter_from_mapping(request.facets, request.source_scope_ids)
         hits = await self._rank(dense_vector, context, facet_filter, limit=request.limit + 1)
         if hits is None:
@@ -286,52 +336,57 @@ class EntitySummarySearch:
         if not hits:
             unknown = await self._undeclared_facets(request.facets, context)
             return EntityFindResponse(request_id, (), reasons=(UNKNOWN_FACET,) if unknown else ())
+        released, withheld = await self._released(request, hits)
+        matches = tuple(
+            self._match(item, rank=rank)
+            for rank, item in enumerate(released[: request.limit], start=1)
+        )
+        tenant_shared = request.access.corpus_mode == "tenant_shared"
+        truncated = (len(hits) if tenant_shared else len(released)) > request.limit
+        if not withheld or not tenant_shared:
+            return EntityFindResponse(request_id, matches, truncated=truncated)
+        return EntityFindResponse(
+            request_id,
+            matches,
+            truncated=truncated,
+            reasons=(ENTITIES_WITHOUT_RELEASED_EVIDENCE,),
+            withheld_count=withheld,
+        )
+
+    async def _released(
+        self, request: EntityFindRequest, hits: tuple[EntityHit, ...]
+    ) -> tuple[list[_ReleasedHit], int]:
+        """Return the hits the authority releases, and how many it withheld.
+
+        Every ranked hit is checked, so the released count is known past ``limit``.
+        A withheld hit is counted only while fewer than ``limit`` hits were
+        released, because the answer stops at the ``limit``-th match.
+        """
         tenant_id = str(request.access.tenant_id)
         keys = tuple(hit.node_key for hit in hits)
         evidence, views = await asyncio.gather(
             self.summaries.entity_evidence(tenant_id, keys, access=request.access),
             self.summaries.views(tenant_id, keys, access=request.access),
         )
-        matches: list[EntityMatch] = []
+        released: list[_ReleasedHit] = []
         withheld = 0
         for hit in hits:
-            if len(matches) == request.limit:
-                break
-            chunks = evidence.get(hit.node_key)
-            view = views.get(hit.node_key)
-            if not chunks or view is None or view.card is None:
+            item = _released_hit(hit, evidence.get(hit.node_key), views.get(hit.node_key))
+            if item is not None:
+                released.append(item)
+            elif len(released) < request.limit:
                 withheld += 1
-                continue
-            matches.append(
-                self._match(hit, view.card, view.coverage_mode, chunks, rank=len(matches) + 1)
-            )
-        truncated = len(hits) > request.limit
-        if not withheld or request.access.corpus_mode != "tenant_shared":
-            return EntityFindResponse(request_id, tuple(matches), truncated=truncated)
-        return EntityFindResponse(
-            request_id,
-            tuple(matches),
-            truncated=truncated,
-            reasons=(ENTITIES_WITHOUT_RELEASED_EVIDENCE,),
-            withheld_count=withheld,
-        )
+        return released, withheld
 
-    def _match(  # noqa: PLR0913 - the parts of one released match
-        self,
-        hit: EntityHit,
-        card: SummaryCard,
-        coverage_mode: str | None,
-        chunks: tuple[str, ...],
-        *,
-        rank: int,
-    ) -> EntityMatch:
+    def _match(self, released: _ReleasedHit, *, rank: int) -> EntityMatch:
+        card = released.card
         return EntityMatch(
-            node_key=hit.node_key,
-            source_scope_id=hit.source_scope_id,
+            node_key=released.hit.node_key,
+            source_scope_id=released.hit.source_scope_id,
             rank=rank,
-            score=hit.score,
+            score=released.hit.score,
             description=card.description,
-            coverage_mode=coverage_mode,
+            coverage_mode=released.coverage_mode,
             attributes=tuple(
                 {
                     "name": item.name,
@@ -340,20 +395,18 @@ class EntitySummarySearch:
                 }
                 for item in card.attributes
             ),
-            evidence_chunk_ids=chunks[: self.max_chunks_per_entity],
+            evidence_chunk_ids=released.chunks[: self.max_chunks_per_entity],
         )
 
     async def _undeclared_facets(
         self, facets: Mapping[str, object], context: StorageOperationContext
     ) -> tuple[str, ...]:
-        """The facet names the entity index has no payload index for.
+        """Return the facet names the entity index has no payload index for.
 
-        Every facet any scope declares is indexed when its cards are published,
-        so a name missing from the index was declared nowhere: a filter on it can
-        only match nothing, which is not the same answer as "no entity qualifies".
-        The cached index list is refreshed once before calling a name unknown.
+        Every declared facet is indexed when its cards are published, so a missing
+        name was declared by no scope. The cached index list is refreshed once
+        before a name is reported.
         """
-
         if not facets or not isinstance(self.vectors, PayloadIndexCatalog):
             return ()
         index = self.profile.entity_index_name
@@ -373,8 +426,7 @@ class EntitySummarySearch:
         *,
         limit: int | None,
     ) -> tuple[EntityHit, ...] | None:
-        """Ranked hits, or ``None`` when this tenant has no entity index at all."""
-
+        """Rank entity hits, or return None when the tenant has no entity index."""
         index = self.profile.entity_index_name
         if not await self.vectors.index_exists(index, context=context):
             return None
@@ -424,6 +476,11 @@ class EntitySummarySearch:
         node_keys: tuple[str, ...],
         context: StorageOperationContext,
     ) -> tuple[VectorSearchResult, ...]:
+        """Load each entity's released evidence chunks, in entity rank order.
+
+        Every score is zero, because a chunk's position comes from its entity's
+        rank, not from its own similarity.
+        """
         if not node_keys:
             return ()
         evidence = await self.summaries.entity_evidence(
@@ -451,8 +508,6 @@ class EntitySummarySearch:
             and row.payload.get("record_kind") == "evidence"
             and row.payload.get("chunk_id") in set(chunks)
         }
-        # Preserve the entity ranking: a chunk's position here is its entity's
-        # rank, not its own similarity, which is the point of the lane.
         return tuple(
             VectorSearchResult(id=row.id, score=0, raw_score=0, payload=row.payload)
             for chunk in chunks
@@ -460,15 +515,22 @@ class EntitySummarySearch:
         )
 
 
+def _released_hit(
+    hit: EntityHit, chunks: tuple[str, ...] | None, view: SummaryView | None
+) -> _ReleasedHit | None:
+    """Pair a hit with its released card and evidence, or None when either is withheld."""
+    if not chunks or view is None or view.card is None:
+        return None
+    return _ReleasedHit(hit, view.card, view.coverage_mode, chunks)
+
+
 def _with_scope_conditions(
     facet_filter: VectorFilter | None, chunk_filter: VectorFilter | None
 ) -> VectorFilter | None:
     """Carry the caller's ``source_scope_id`` conditions onto the entity search.
 
-    Entity points carry their scope, so ranking within it is a lookup. Without
-    it, selection ranked the top entities of every scope and then dropped the
-    ones outside the caller's, which could leave nothing although entities of
-    the requested scope qualified.
+    Entity points carry their scope, so ranking within the caller's scopes keeps
+    entities of other scopes from taking every ranked place.
     """
 
     def scoped(conditions: list[VectorFilterCondition]) -> list[VectorFilterCondition]:
@@ -491,14 +553,13 @@ def _with_scope_conditions(
 
 
 def payload_matches(payload: Mapping[str, object], filters: VectorFilter) -> bool:
-    """Whether an evidence payload satisfies a filter, read the way Qdrant reads it.
+    """Return whether an evidence payload satisfies a filter, as Qdrant reads it.
 
     Entity-reached chunks are fetched by id, not searched, so the caller's filter
     is checked here instead. A dotted field walks nested objects, a list-valued
     field matches when any member does, and ``should`` needs one of its
     conditions when it has any. An operator this cannot evaluate fails closed.
     """
-
     return (
         all(_condition_matches(payload, item) for item in filters.must)
         and (not filters.should or any(_condition_matches(payload, i) for i in filters.should))
@@ -548,7 +609,7 @@ def _is_number(value: object) -> bool:
 
 
 def _same(value: object, wanted: object) -> bool:
-    # ``True == 1`` in Python, never in a payload match.
+    """Compare payload values without treating a bool as equal to a number."""
     if isinstance(value, bool) or isinstance(wanted, bool):
         return isinstance(value, bool) and isinstance(wanted, bool) and value is wanted
     return value == wanted

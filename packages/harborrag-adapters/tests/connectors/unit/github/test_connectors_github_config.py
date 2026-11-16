@@ -10,8 +10,19 @@ from harborrag_adapters.connectors.github.repository_paths import parse_github_r
 
 pytestmark = [pytest.mark.unit, pytest.mark.graybox]
 
+UNSAFE_REPOSITORY_SEGMENTS = [
+    pytest.param("ac/me", id="slash"),
+    pytest.param("..", id="parent"),
+    pytest.param(".", id="current"),
+    pytest.param("acme?x=1", id="query"),
+    pytest.param("acme#x", id="fragment"),
+    pytest.param("ac%2Fme", id="percent"),
+    pytest.param("ac me", id="space"),
+    pytest.param("acme\n", id="trailing-newline"),
+]
 
-def test_config_parses_repository_url_and_normalizes_extensions():
+
+def test_config_repository_url_sets_owner_and_repo_and_normalizes_extensions() -> None:
     cfg = config(allowed_extensions={"py", ".MD"}, excluded_extensions={"png"})
 
     assert cfg.owner == "acme"
@@ -24,9 +35,9 @@ def test_config_parses_repository_url_and_normalizes_extensions():
     )
 
 
-def test_close_delegates_to_client_close():
+def test_close_client_with_close_calls_it() -> None:
     client = FakeGitHubClient()
-    closed = []
+    closed: list[bool] = []
     client.close = lambda: closed.append(True)
     connector = GitHubConnector(config(), client=client)
 
@@ -35,15 +46,15 @@ def test_close_delegates_to_client_close():
     assert closed == [True]
 
 
-def test_close_is_a_no_op_when_client_lacks_close():
+def test_close_client_without_close_does_not_raise() -> None:
     connector = GitHubConnector(config(), client=FakeGitHubClient())
 
-    connector.close()  # must not raise
+    connector.close()
 
 
-def test_connector_context_manager_calls_close():
+def test_connector_context_manager_exit_calls_client_close() -> None:
     client = FakeGitHubClient()
-    closed = []
+    closed: list[bool] = []
     client.close = lambda: closed.append(True)
 
     with GitHubConnector(config(), client=client) as connector:
@@ -52,33 +63,77 @@ def test_connector_context_manager_calls_close():
     assert closed == [True]
 
 
-def test_config_requires_owner_and_repo():
+def test_config_without_owner_and_repo_raises() -> None:
     with pytest.raises(ValueError, match="owner/repo or repository_url"):
         GitHubRepositoryConfig()
 
 
-def test_config_rejects_ref_and_branch_together():
+@pytest.mark.parametrize("field_name", ["owner", "repo"])
+def test_config_empty_owner_or_repo_raises(field_name: str) -> None:
+    values = {"owner": "acme", "repo": "harbor-rag", field_name: ""}
+
+    with pytest.raises(ValueError, match="owner/repo or repository_url"):
+        GitHubRepositoryConfig(**values)
+
+
+@pytest.mark.parametrize("value", UNSAFE_REPOSITORY_SEGMENTS)
+@pytest.mark.parametrize("field_name", ["owner", "repo"])
+def test_config_owner_or_repo_not_one_path_segment_raises(field_name: str, value: str) -> None:
+    values = {"owner": "acme", "repo": "harbor-rag", field_name: value}
+
+    with pytest.raises(ValueError, match=f"{field_name} must be one URL path segment"):
+        GitHubRepositoryConfig(**values)
+
+
+def test_config_invalid_owner_message_omits_value() -> None:
+    with pytest.raises(ValueError, match="owner must be one URL path segment") as raised:
+        GitHubRepositoryConfig(owner="acme corp/x", repo="harbor-rag")
+
+    assert "acme corp" not in str(raised.value)
+
+
+def test_config_repository_url_with_unsafe_repo_segment_raises() -> None:
+    with pytest.raises(ValueError, match="repo must be one URL path segment"):
+        GitHubRepositoryConfig(repository_url="https://github.com/acme/harbor%3Frag")
+
+
+@pytest.mark.parametrize(
+    ("owner", "repo"),
+    [
+        pytest.param("acme", "harbor-rag", id="hyphen"),
+        pytest.param("o", "r", id="single-character"),
+        pytest.param("user-other", "docs", id="user"),
+        pytest.param("user_acme", "harbor.rag", id="managed-user-and-dotted-repo"),
+    ],
+)
+def test_config_owner_and_repo_single_segments_are_kept(owner: str, repo: str) -> None:
+    cfg = GitHubRepositoryConfig(owner=owner, repo=repo)
+
+    assert (cfg.owner, cfg.repo) == (owner, repo)
+
+
+def test_config_ref_and_branch_together_raises() -> None:
     with pytest.raises(ValueError, match="ref or branch, not both"):
         GitHubRepositoryConfig(owner="acme", repo="harbor-rag", ref="v1", branch="main")
 
 
-def test_config_rejects_commit_sha_with_ref_or_branch():
+def test_config_commit_sha_with_ref_raises() -> None:
     with pytest.raises(ValueError, match="commit_sha or ref/branch, not both"):
         GitHubRepositoryConfig(owner="acme", repo="harbor-rag", commit_sha="abc123", ref="v1")
 
 
-def test_config_rejects_out_of_range_requests_per_minute():
+def test_config_requests_per_minute_out_of_range_raises() -> None:
     with pytest.raises(ValueError, match="requests_per_minute must be between"):
         GitHubRepositoryConfig(owner="acme", repo="harbor-rag", requests_per_minute=0)
 
 
-def test_config_rejects_non_https_api_url():
+def test_config_non_https_api_url_raises() -> None:
     with pytest.raises(ValueError, match="api_url must be an HTTPS URL"):
         GitHubRepositoryConfig(
             owner="acme", repo="harbor-rag", api_url="http://ghe.internal/api/v3"
         )
 
 
-def test_config_rejects_non_https_web_url():
+def test_config_non_https_web_url_raises() -> None:
     with pytest.raises(ValueError, match="web_url must be an HTTPS URL"):
         GitHubRepositoryConfig(owner="acme", repo="harbor-rag", web_url="http://ghe.internal")

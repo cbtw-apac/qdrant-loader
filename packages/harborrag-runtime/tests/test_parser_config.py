@@ -6,6 +6,8 @@ from textwrap import dedent
 
 import pytest
 
+from harborrag_adapters.parsers import HarborParserFactory, HarborParserRegistry
+from harborrag_adapters.parsers.common.family import HarborSingleEngineFamilyParser
 from harborrag_adapters.parsers.compat import (
     DoclingBackend,
     LiteParseBackend,
@@ -19,10 +21,13 @@ from harborrag_runtime.config import (
     ParserConfigurationError,
     load_parser_catalog,
 )
+from harborrag_runtime.config.parsers.providers import supported_parser_names
 from harborrag_runtime.config.parsers.schemas import (
     ParserDefinition,
     PdfBackendDefinition,
 )
+
+pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -33,7 +38,10 @@ def _write_config(tmp_path: Path, content: str) -> Path:
     return config_path
 
 
-def test_repository_config_builds_enabled_parser_overrides(caplog, monkeypatch) -> None:
+def test_repository_config_builds_enabled_parser_overrides(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("HARBORRAG_OCR_SERVER_URL", raising=False)
     with caplog.at_level(logging.INFO, logger="harborrag.runtime.config.parsers"):
         catalog = load_parser_catalog(REPO_ROOT / "config" / "ingestion" / "parsers.yaml")
@@ -44,8 +52,9 @@ def test_repository_config_builds_enabled_parser_overrides(caplog, monkeypatch) 
     assert isinstance(pdf_parser, PdfParser)
     assert [backend.name for backend in pdf_parser.backends] == ["liteparse"]
     assert isinstance(pdf_parser.backends[0], LiteParseBackend)
-    # Without HARBORRAG_OCR_SERVER_URL no OCR server is used: LiteParse OCRs locally.
-    assert pdf_parser.backends[0].options.ocr_server_url is None
+    assert pdf_parser.backends[0].options.ocr_server_url is None, (
+        "without HARBORRAG_OCR_SERVER_URL LiteParse OCRs locally"
+    )
 
     image_parser = catalog.build("image-liteparse")
     assert isinstance(image_parser, HarborImageParser)
@@ -68,7 +77,9 @@ def test_repository_config_keeps_inactive_alternatives_commented() -> None:
     assert catalog.names() == ["image-liteparse", "pdf-liteparse"]
 
 
-def test_ocr_server_url_follows_the_environment_over_the_catalog_default(monkeypatch) -> None:
+def test_ocr_server_url_follows_the_environment_over_the_catalog_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("HARBORRAG_OCR_SERVER_URL", "http://localhost:8888/ocr")
 
     catalog = load_parser_catalog(REPO_ROOT / "config" / "ingestion" / "parsers.yaml")
@@ -81,7 +92,7 @@ def test_ocr_server_url_follows_the_environment_over_the_catalog_default(monkeyp
     )
 
 
-def test_an_empty_ocr_server_url_means_no_ocr_server(monkeypatch) -> None:
+def test_an_empty_ocr_server_url_means_no_ocr_server(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HARBORRAG_OCR_SERVER_URL", "  ")
 
     catalog = load_parser_catalog(REPO_ROOT / "config" / "ingestion" / "parsers.yaml")
@@ -93,7 +104,8 @@ def test_an_empty_ocr_server_url_means_no_ocr_server(monkeypatch) -> None:
 
 
 def test_setting_reference_to_an_unset_variable_without_a_default_is_rejected(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("TEST_OCR_SERVER_URL", raising=False)
     config_path = _write_config(
@@ -385,3 +397,83 @@ def test_registry_rejects_multiple_enabled_profiles_for_same_parser(
 
     with pytest.raises(ParserConfigurationError, match="both configure family"):
         catalog.build_harbor_parser()
+
+
+_FORMAT_PARSER_SAMPLE_FILES = {
+    "csv": "a.csv",
+    "docx": "a.docx",
+    "epub": "a.epub",
+    "excel": "a.xlsx",
+    "html": "a.html",
+    "image": "a.png",
+    "json": "a.json",
+    "markdown": "a.md",
+    "pptx": "a.pptx",
+    "text": "a.txt",
+}
+
+
+def _single_engine_family(
+    registry: HarborParserRegistry,
+    filename: str,
+) -> HarborSingleEngineFamilyParser:
+    family = registry.resolve(filename, None)
+    assert isinstance(family, HarborSingleEngineFamilyParser)
+    return family
+
+
+def _engine_names(family: HarborSingleEngineFamilyParser) -> list[str]:
+    return sorted(engine.name for engine in family.engines)
+
+
+def test_format_parser_samples_cover_every_parser_type_but_pdf() -> None:
+    assert sorted(_FORMAT_PARSER_SAMPLE_FILES) == [
+        name for name in supported_parser_names() if name != "pdf"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("parser", "sample_file"),
+    sorted(_FORMAT_PARSER_SAMPLE_FILES.items()),
+)
+def test_build_registry_one_format_definition_keeps_every_route_of_its_family(
+    tmp_path: Path,
+    parser: str,
+    sample_file: str,
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        f"""
+        version: 1
+        parsers:
+          custom:
+            parser: {parser}
+        """,
+    )
+    default_family = _single_engine_family(HarborParserFactory().create_registry(), sample_file)
+
+    family = _single_engine_family(load_parser_catalog(config_path).build_registry(), sample_file)
+
+    assert family.extensions == default_family.extensions
+    assert family.mime_types == default_family.mime_types
+    assert _engine_names(family) == _engine_names(default_family)
+
+
+def test_build_registry_other_ocr_engine_replaces_the_default_image_engine(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """
+        version: 1
+        parsers:
+          custom-image:
+            parser: image
+            settings:
+              ocr_engine: pytesseract
+        """,
+    )
+
+    registry = load_parser_catalog(config_path).build_registry()
+
+    assert _engine_names(_single_engine_family(registry, "scan.png")) == ["pytesseract"]

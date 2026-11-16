@@ -1,4 +1,6 @@
-"""find_entities: whole entities ranked and filtered, evidence released by the authority."""
+"""Tests for find_entities ranking, facet filters and released evidence."""
+
+from typing import NoReturn
 
 import pytest
 from test_entity_summary_search import PROFILE, Vectors, entity_hit
@@ -19,12 +21,14 @@ from harborrag_engine.tools.find_entities import FindEntitiesTool
 from harborrag_engine.tools.references import KnowledgeReferenceStore
 from harborrag_runtime.retrieval.entity_summary import EntitySummarySearch
 
+pytestmark = pytest.mark.unit
+
 
 class Retrieval:
     def __init__(self) -> None:
         self.requests: list[EntityFindRequest] = []
 
-    async def search(self, request):  # pragma: no cover - not exercised here
+    async def search(self, request: object) -> NoReturn:  # pragma: no cover - not exercised here
         raise AssertionError("search is not the tool under test")
 
     async def find_entities(self, request: EntityFindRequest) -> EntityFindResponse:
@@ -55,6 +59,7 @@ class Retrieval:
 
 @pytest.mark.asyncio
 async def test_the_tool_passes_facets_through_and_reports_partial_coverage() -> None:
+    """A truncated answer tells the caller that more entities qualified."""
     retrieval = Retrieval()
     tool = FindEntitiesTool(retrieval=retrieval, references=KnowledgeReferenceStore())
     result = await tool.call(
@@ -78,7 +83,6 @@ async def test_the_tool_passes_facets_through_and_reports_partial_coverage() -> 
     assert match["coverage_mode"] == "partial"
     assert match["attributes"][0]["values"] == ["round 2"]
     assert match["evidence_chunk_ids"] == ["chunk-1", "chunk-2"]
-    # More qualified than the limit: the caller is told, not left to assume.
     assert result["completion"] == {"complete": False, "reasons": ["candidate_limit"]}
 
 
@@ -105,10 +109,12 @@ def test_the_tool_is_in_the_shared_catalog_and_read_only() -> None:
 
 
 class Summaries:
-    async def entity_evidence(self, tenant_id, node_keys, *, access):
+    async def entity_evidence(
+        self, tenant_id: str, node_keys: tuple[str, ...], *, access: AccessContext
+    ) -> dict[str, tuple[str, ...]]:
         return {}
 
-    async def views(self, *args, **kwargs):
+    async def views(self, *args: object, **kwargs: object) -> dict[str, SummaryView]:
         return {}
 
 
@@ -142,12 +148,12 @@ class Unindexed(Retrieval):
 
 @pytest.mark.asyncio
 async def test_a_missing_index_is_an_incomplete_answer_not_an_empty_one() -> None:
+    """A missing index says it could not look, never that nothing matched."""
     tool = FindEntitiesTool(retrieval=Unindexed(), references=KnowledgeReferenceStore())
     result = await tool.call({"tenant_id": "AUTA-5", "query": "java"}, principal_id="p")
     assert result["ok"] is True
     assert result["matches"] == []
     assert result["withheld_entity_count"] == 0
-    # "Could not look" must never read as "nothing matched".
     assert result["completion"] == {"complete": False, "reasons": [ENTITY_INDEX_UNAVAILABLE]}
     jsonschema = pytest.importorskip("jsonschema")
     jsonschema.validate(result, tool.spec.output_schema)
@@ -167,10 +173,19 @@ class Released:
     def __init__(self, released: set[str]) -> None:
         self.released = released
 
-    async def entity_evidence(self, tenant_id, node_keys, *, access):
+    async def entity_evidence(
+        self, tenant_id: str, node_keys: tuple[str, ...], *, access: AccessContext
+    ) -> dict[str, tuple[str, ...]]:
         return {key: ("chunk-" + key,) for key in node_keys if key in self.released}
 
-    async def views(self, tenant_id, node_keys, *, access, source_scopes=None):
+    async def views(
+        self,
+        tenant_id: str,
+        node_keys: tuple[str, ...],
+        *,
+        access: AccessContext,
+        source_scopes: dict[str, str] | None = None,
+    ) -> dict[str, SummaryView]:
         card = SummaryCard(
             description="Senior Java engineer.",
             attributes=(SummaryAttribute(name="skill_set", values=("BE-Java",)),),
@@ -238,7 +253,6 @@ async def test_hits_with_no_released_summary_are_counted_on_a_shared_corpus() ->
 @pytest.mark.asyncio
 async def test_unreleased_hits_stay_silent_under_source_acls() -> None:
     """Under source ACLs a count would say how many private entities match."""
-
     vectors = Vectors(
         records={PROFILE.entity_index_name: {}},
         hits=(entity_hit("node-a"), entity_hit("node-b")),
@@ -263,6 +277,85 @@ async def test_more_released_entities_than_the_limit_is_truncation() -> None:
     )
     assert [match.node_key for match in response.matches] == ["node-a", "node-b"]
     assert response.truncated and response.reasons == ()
+
+
+def _ranked(*node_keys: str) -> Vectors:
+    return Vectors(
+        records={PROFILE.entity_index_name: {}},
+        hits=tuple(entity_hit(key) for key in node_keys),
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_under_source_acls_with_every_hit_withheld_reports_no_truncation() -> None:
+    """Hidden entities filling the window must not read as ``candidate_limit``.
+
+    That reason would tell a source-ACL reader that more than ``limit`` hidden
+    entities match their facets.
+    """
+    search = EntitySummarySearch(Released(set()), _ranked("node-a", "node-b", "node-c"), PROFILE)
+    response = await search.find(
+        _request("source_acl", limit=2),
+        "entities-x",
+        (1.0, 0.0),
+        StorageOperationContext.system("DEFAULT"),
+    )
+    assert response.matches == ()
+    assert not response.truncated
+    assert response.reasons == () and response.withheld_count == 0
+
+    tool = FindEntitiesTool(retrieval=_Fixed(response), references=KnowledgeReferenceStore())
+    result = await tool.call({"tenant_id": "DEFAULT", "query": "java"}, principal_id="p")
+    assert "candidate_limit" not in result["completion"]["reasons"]
+
+
+@pytest.mark.asyncio
+async def test_find_under_source_acls_with_more_visible_hits_than_the_limit_is_truncated() -> None:
+    search = EntitySummarySearch(
+        Released({"node-a", "node-b", "node-c"}),
+        _ranked("node-a", "node-b", "node-c"),
+        PROFILE,
+    )
+    response = await search.find(
+        _request("source_acl", limit=2),
+        "entities-x",
+        (1.0, 0.0),
+        StorageOperationContext.system("DEFAULT"),
+    )
+    assert [match.node_key for match in response.matches] == ["node-a", "node-b"]
+    assert response.truncated and response.reasons == ()
+
+
+@pytest.mark.asyncio
+async def test_find_under_source_acls_with_one_hit_withheld_returns_limit_untruncated() -> None:
+    """Only ``limit`` visible entities matched, so the answer is not cut short."""
+    search = EntitySummarySearch(
+        Released({"node-a", "node-c"}), _ranked("node-a", "node-b", "node-c"), PROFILE
+    )
+    response = await search.find(
+        _request("source_acl", limit=2),
+        "entities-x",
+        (1.0, 0.0),
+        StorageOperationContext.system("DEFAULT"),
+    )
+    assert [match.node_key for match in response.matches] == ["node-a", "node-c"]
+    assert [match.rank for match in response.matches] == [1, 2]
+    assert not response.truncated
+    assert response.reasons == () and response.withheld_count == 0
+
+
+@pytest.mark.asyncio
+async def test_find_on_a_shared_corpus_ignores_withheld_hits_past_the_limit() -> None:
+    """A withheld hit past a full limit is not counted and does not hide truncation."""
+    search = EntitySummarySearch(
+        Released({"node-a", "node-b"}), _ranked("node-a", "node-b", "node-c"), PROFILE
+    )
+    response = await search.find(
+        _request(limit=2), "entities-x", (1.0, 0.0), StorageOperationContext.system("DEFAULT")
+    )
+    assert [match.node_key for match in response.matches] == ["node-a", "node-b"]
+    assert response.truncated
+    assert response.reasons == () and response.withheld_count == 0
 
 
 class _Fixed(Retrieval):

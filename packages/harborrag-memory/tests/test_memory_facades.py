@@ -23,6 +23,8 @@ from harborrag_memory import (
     ShortTermMemory,
 )
 
+pytestmark = pytest.mark.unit
+
 
 @dataclass
 class ConversationRepositoryFake:
@@ -120,13 +122,10 @@ async def test_long_term_refuses_a_write_attributed_to_a_colleague(
 ) -> None:
     """Attribution inside a tenant has to be the caller's own.
 
-    ``visible_to`` compares only the fields the scope keys on, so a
-    TENANT-scoped write was checked against the tenant alone. Any member could
-    publish a tenant-wide fact stamped with a colleague's ``user_id``; erasure
-    is by owner, so the colleague's erasure would delete it and the author's
-    would miss it.
+    ``visible_to`` checks only the fields the scope keys on, so a TENANT write
+    was checked against the tenant alone. Erasure is by owner, so a borrowed
+    ``user_id`` would put the row in the colleague's erasure, not the author's.
     """
-
     tier = LongTermMemory(MemoryRepositoryFake())
     colleague = Memory(
         memory_id="borrowed-1",
@@ -145,7 +144,6 @@ async def test_long_term_still_accepts_an_unattributed_tenant_fact(
     owner: MemoryOwner,
 ) -> None:
     """Leaving a field unset is how a genuinely tenant-wide fact is recorded."""
-
     repository = MemoryRepositoryFake()
     tier = LongTermMemory(repository)
     tenant_wide = Memory(
@@ -191,6 +189,51 @@ async def test_long_term_rejects_forged_and_global_writes(owner: MemoryOwner) ->
     assert await tier.search(owner, MemoryQuery(owner=owner)) == (memory,)
     await tier.forget(owner, memory.memory_id)
     assert await tier.get(owner, memory.memory_id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_tenant", ["tenant-a", "tenant-b"])
+async def test_long_term_delete_of_a_global_memory_raises_and_keeps_the_row(
+    owner: MemoryOwner, caller_tenant: str
+) -> None:
+    """A global memory is readable by every caller, so deleting one takes an admin.
+
+    The row is placed in the repository directly because ``save`` already
+    refuses global writes. The caller from another tenant sees it too.
+    """
+    repository = MemoryRepositoryFake()
+    global_memory = Memory(
+        memory_id="global-1",
+        scope=MemoryScope.GLOBAL,
+        memory_type=MemoryType.FACT,
+        owner=MemoryOwner(tenant_id=owner.tenant_id),
+        content="global",
+    )
+    repository.values[global_memory.memory_id] = global_memory
+    tier = LongTermMemory(repository)
+    caller = MemoryOwner(tenant_id=caller_tenant, user_id="user-2", principal_id="user-2")
+
+    with pytest.raises(MemoryScopeError, match="administrative"):
+        await tier.delete(caller, global_memory.memory_id)
+    with pytest.raises(MemoryScopeError, match="administrative"):
+        await tier.forget(caller, global_memory.memory_id)
+
+    assert repository.values == {global_memory.memory_id: global_memory}
+
+
+@pytest.mark.asyncio
+async def test_long_term_delete_of_a_user_memory_or_unknown_id_succeeds(
+    owner: MemoryOwner,
+) -> None:
+    repository = MemoryRepositoryFake()
+    tier = LongTermMemory(repository)
+    memory = make_memory(owner)
+    await tier.save(owner, memory)
+
+    await tier.delete(owner, memory.memory_id)
+    await tier.delete(owner, "missing-1")
+
+    assert repository.values == {}
 
 
 @pytest.mark.asyncio

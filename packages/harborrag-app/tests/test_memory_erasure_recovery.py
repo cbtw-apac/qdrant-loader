@@ -1,7 +1,8 @@
-"""Cross-store erasure retains enough durable state to recover partial failures."""
+"""Who may delete a memory, and erasure that recovers from partial failures."""
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,14 +13,18 @@ from harborrag_app.workflow_control.control_plane.effect_recovery import (
     recover_pending_control_plane_effects,
 )
 from harborrag_app.workflow_control.memory.administration import MemoryAdministrationService
+from harborrag_core.contracts.errors import HarborAuthError
+from harborrag_core.domain.pending_effect import PendingControlPlaneEffect
 from harborrag_core.ports.conversation import ConversationIdentity
-from harborrag_core.ports.memory import MemoryScope
+from harborrag_core.ports.memory import MemoryOwner, MemoryScope
 from harborrag_core.testing.control_plane_fakes import FakePendingEffectRepository
 from harborrag_runtime.memory import InMemoryConversationMemory
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
-def stores():
+def stores() -> SimpleNamespace:
     return SimpleNamespace(
         memories=FakeMemoryStore(),
         index=FakeMemoryIndex(),
@@ -28,7 +33,7 @@ def stores():
     )
 
 
-def administration(stores, *, journal=True):
+def administration(stores: SimpleNamespace, *, journal: bool = True) -> MemoryAdministrationService:
     return MemoryAdministrationService(
         conversations=stores.conversations,
         memories=stores.memories,
@@ -37,15 +42,17 @@ def administration(stores, *, journal=True):
     )
 
 
-async def recover(stores):
-    # Reconstruct the service: recovery cannot depend on request-local memory.
+async def recover(stores: SimpleNamespace) -> int:
+    """Replay pending erasures through a new service, as recovery after a restart does."""
     return await recover_pending_control_plane_effects(
         stores, erasure_handler=administration(stores).recover_erasure
     )
 
 
 @pytest.mark.asyncio
-async def test_vector_failure_recovers_after_canonical_row_is_gone(stores):
+async def test_vector_failure_recovers_after_canonical_row_is_gone(
+    stores: SimpleNamespace,
+) -> None:
     row = memory("memory-1")
     await stores.memories.save(row)
     stores.index.failure = RuntimeError("index unavailable")
@@ -60,7 +67,9 @@ async def test_vector_failure_recovers_after_canonical_row_is_gone(stores):
 
 
 @pytest.mark.asyncio
-async def test_session_purge_failure_recovers_without_a_client_retry(stores, monkeypatch):
+async def test_session_purge_failure_recovers_without_a_client_retry(
+    stores: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     row = memory("memory-1", scope=MemoryScope.SESSION, session_id="session-1")
     identity = ConversationIdentity(
         row.owner.tenant_id, row.owner.principal_id, row.owner.session_id, row.owner.user_id
@@ -81,7 +90,9 @@ async def test_session_purge_failure_recovers_without_a_client_retry(stores, mon
 
 
 @pytest.mark.asyncio
-async def test_enqueue_failure_happens_before_deleting_anything(stores, monkeypatch):
+async def test_enqueue_failure_happens_before_deleting_anything(
+    stores: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     row = memory("memory-1")
     await stores.memories.save(row)
     monkeypatch.setattr(
@@ -94,7 +105,9 @@ async def test_enqueue_failure_happens_before_deleting_anything(stores, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_canonical_delete_failure_keeps_intent(stores, monkeypatch):
+async def test_canonical_delete_failure_keeps_intent(
+    stores: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     row = memory("memory-1")
     await stores.memories.save(row)
     delete = stores.memories.delete
@@ -109,7 +122,9 @@ async def test_canonical_delete_failure_keeps_intent(stores, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_without_journal_index_failure_preserves_canonical_retry_handle(stores):
+async def test_without_journal_index_failure_preserves_canonical_retry_handle(
+    stores: SimpleNamespace,
+) -> None:
     row = memory("memory-1")
     await stores.memories.save(row)
     stores.index.failure = RuntimeError("index down")
@@ -122,7 +137,9 @@ async def test_without_journal_index_failure_preserves_canonical_retry_handle(st
 
 
 @pytest.mark.asyncio
-async def test_recovery_does_not_forget_required_index_after_configuration_change(stores):
+async def test_recovery_does_not_forget_required_index_after_configuration_change(
+    stores: SimpleNamespace,
+) -> None:
     row = memory("memory-1")
     await stores.memories.save(row)
     stores.index.failure = RuntimeError("index down")
@@ -133,15 +150,16 @@ async def test_recovery_does_not_forget_required_index_after_configuration_chang
 
 
 @pytest.mark.asyncio
-async def test_session_recovery_remains_authorized_when_session_was_already_deleted(stores):
-    from dataclasses import asdict
+async def test_session_recovery_remains_authorized_when_session_was_already_deleted(
+    stores: SimpleNamespace,
+) -> None:
+    """The durable owner was authorized before deletion.
 
-    from harborrag_core.domain.pending_effect import PendingControlPlaneEffect
-
+    A retry must not depend on a conversation row that interrupted cleanup may
+    already have removed.
+    """
     row = memory("memory-1", scope=MemoryScope.SESSION, session_id="session-1")
     await stores.memories.save(row)
-    # The durable owner was authorized before deletion; retry must not depend
-    # on a conversation row that may already be gone after interrupted cleanup.
     await stores.pending_effects.enqueue(
         PendingControlPlaneEffect(
             id="interrupted-session-erasure",
@@ -156,11 +174,9 @@ async def test_session_recovery_remains_authorized_when_session_was_already_dele
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["erase_memory", "erase_memory_session"])
-async def test_an_intent_queued_before_the_upgrade_still_recovers(stores, kind):
-    from dataclasses import asdict
-
-    from harborrag_core.domain.pending_effect import PendingControlPlaneEffect
-
+async def test_an_intent_queued_before_the_upgrade_still_recovers(
+    stores: SimpleNamespace, kind: str
+) -> None:
     row = memory("memory-1", scope=MemoryScope.SESSION, session_id="session-1")
     await stores.memories.save(row)
     await stores.pending_effects.enqueue(
@@ -179,3 +195,47 @@ async def test_an_intent_queued_before_the_upgrade_still_recovers(stores, kind):
     assert not stores.memories.rows
     assert stores.index.deleted == [row.memory_id]
     assert not stores.pending_effects.effects
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "shared_scopes", [frozenset(), frozenset(MemoryScope)], ids=["author", "moderator"]
+)
+async def test_delete_memory_of_a_global_memory_is_forbidden_and_erases_nothing(
+    stores: SimpleNamespace, shared_scopes: frozenset[MemoryScope]
+) -> None:
+    """Neither the author nor a moderator may delete a global memory."""
+    row = memory("global-1", scope=MemoryScope.GLOBAL)
+    await stores.memories.save(row)
+
+    with pytest.raises(HarborAuthError, match="administrative") as raised:
+        await administration(stores).delete_memory(
+            row.owner, row.memory_id, shared_scopes=shared_scopes
+        )
+
+    assert raised.value.forbidden
+    assert row.memory_id in stores.memories.rows
+    assert not stores.index.deleted
+    assert not stores.pending_effects.effects
+
+
+@pytest.mark.asyncio
+async def test_delete_memory_of_a_colleagues_tenant_memory_needs_authorship_or_moderation(
+    stores: SimpleNamespace,
+) -> None:
+    row = memory("tenant-1", scope=MemoryScope.TENANT, user_id="author-1")
+    await stores.memories.save(row)
+    colleague = MemoryOwner(
+        tenant_id=row.owner.tenant_id, user_id="colleague-1", principal_id="colleague-1"
+    )
+
+    with pytest.raises(HarborAuthError, match="only the author") as raised:
+        await administration(stores).delete_memory(colleague, row.memory_id)
+    assert raised.value.forbidden
+    assert row.memory_id in stores.memories.rows
+
+    await administration(stores).delete_memory(
+        colleague, row.memory_id, shared_scopes=frozenset({MemoryScope.TENANT})
+    )
+    assert not stores.memories.rows
+    assert stores.index.deleted == [row.memory_id]

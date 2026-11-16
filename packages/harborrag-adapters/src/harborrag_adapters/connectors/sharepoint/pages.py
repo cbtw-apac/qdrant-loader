@@ -1,8 +1,16 @@
-"""SharePoint modern site page discovery and HTML rendering."""
+"""SharePoint modern site page listing, fetching and HTML rendering.
+
+Lists and fetches a site's modern pages through Graph and renders their text
+web parts as one HTML document. A page ID reaches a Graph URL only through
+``validate_graph_id_segment``, so an ID from a stored record stays inside one
+URL path segment. Rendering is pure: it escapes the title and passes text web
+part HTML through as Graph returns it.
+
+Start from: SharePointPagesAPI, render_page_html.
+"""
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Iterator
 from html import escape
 from typing import Any
@@ -13,12 +21,12 @@ from harborrag_core.domain.source import SourceRecord
 
 from .client import SharePointClient
 from .config import SharePointSiteConfig
-from .drive_paths import matches_pattern
+from .drive_paths import matches_pattern, validate_graph_id_segment
 from .mappers import build_page_source_record, parse_timestamp
 
-logger = logging.getLogger("harborrag.adapters.connectors.sharepoint")
 _MAX_PROVIDER_PAGES = 10_000
 _TEXT_WEB_PART_TYPE = "#microsoft.graph.textWebPart"
+_SITE_PAGE_ID_LABEL = "SharePoint site page ID"
 
 PAGE_SELECT = ",".join(
     (
@@ -38,10 +46,14 @@ PAGE_SELECT = ",".join(
 
 
 class SharePointPagesAPI:
-    """SharePoint modern site page listing and canvas helpers."""
+    """SharePoint modern site page listing and canvas fetching for one connector config.
+
+    Args:
+        client: Graph client that sends the requests.
+        config: Validated connector config; ``page_size`` sets the listing page size.
+    """
 
     def __init__(self, client: SharePointClient, config: SharePointSiteConfig) -> None:
-        """Bind page operations to a client and validated config."""
         self.client = client
         self.config = config
 
@@ -58,7 +70,20 @@ class SharePointPagesAPI:
                 yield build_page_source_record(page, site_id=site_id)
 
     def iter_pages(self, site_id: str) -> Iterator[dict[str, Any]]:
-        """Iterate Graph sitePage collection pages for a site."""
+        """Iterate Graph sitePage collection pages for a site.
+
+        Graph request errors pass through.
+
+        Args:
+            site_id: Graph site ID.
+
+        Yields:
+            dict[str, Any]: Each site page payload, page by page.
+
+        Raises:
+            FetchError: A page link repeats, the page cap is reached, or a page
+                holds an invalid ``value`` list.
+        """
         endpoint = f"sites/{site_id}/pages/microsoft.graph.sitePage"
         params: dict[str, Any] | None = {
             "$top": self.config.page_size,
@@ -82,9 +107,21 @@ class SharePointPagesAPI:
             params = None
 
     def get_page(self, site_id: str, page_id: str) -> dict[str, Any]:
-        """Fetch one site page with its canvas layout expanded."""
+        """Fetch one site page with its canvas layout expanded.
+
+        The ``ValueError`` from ``validate_graph_id_segment`` is raised for an
+        unsafe ``page_id`` before any request; Graph request errors pass through.
+
+        Args:
+            site_id: Graph site ID of the configured site.
+            page_id: Site page ID, usually a GUID, from discovery or a stored record.
+
+        Returns:
+            The site page payload with ``canvasLayout``.
+        """
+        segment = validate_graph_id_segment(page_id, label=_SITE_PAGE_ID_LABEL)
         return self.client.get_json(
-            f"sites/{site_id}/pages/{page_id}/microsoft.graph.sitePage",
+            f"sites/{site_id}/pages/{segment}/microsoft.graph.sitePage",
             params={"$expand": "canvasLayout"},
         )
 
@@ -116,7 +153,7 @@ def text_web_part_html(page: dict[str, Any]) -> list[str]:
     layout = page.get("canvasLayout")
     if not isinstance(layout, dict):
         return []
-    web_parts: list[Any] = []
+    web_parts: list[dict[str, Any]] = []
     for section in _dict_list(layout.get("horizontalSections")):
         for column in _dict_list(section.get("columns")):
             web_parts.extend(_dict_list(column.get("webparts")))
@@ -141,7 +178,8 @@ def render_page_html(page: dict[str, Any]) -> tuple[str, bool]:
     return "\n".join(parts), bool(fragments)
 
 
-def _dict_list(value: Any) -> list[dict[str, Any]]:
+def _dict_list(value: object) -> list[dict[str, Any]]:
+    """Return the ``dict`` entries of a Graph list field; anything else gives ``[]``."""
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]

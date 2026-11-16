@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -12,6 +13,15 @@ from harborrag_adapters.connectors.confluence.title_resolution import (
     PageTitleResolver,
     _title_digest,
 )
+
+pytestmark = [pytest.mark.unit, pytest.mark.whitebox]
+
+
+@dataclass(frozen=True, slots=True)
+class _Config:
+    """The one ConfluenceSpaceConfig field the resolver reads."""
+
+    space_key: str = "ENG"
 
 
 class _RateLimited(RuntimeError):
@@ -22,6 +32,7 @@ class _Content:
     """Stand in for ConfluenceContentAPI.search, recording every CQL issued."""
 
     def __init__(self, results: dict[str, list[dict[str, Any]]] | None = None) -> None:
+        self.config = _Config()
         self.queries: list[str] = []
         self._results = results or {}
 
@@ -48,7 +59,7 @@ class _FailsOnce(_Content):
 
 
 def _resolver(content: _Content) -> PageTitleResolver:
-    return PageTitleResolver(content)  # type: ignore[arg-type]
+    return PageTitleResolver(content)  # type: ignore[arg-type]  # duck-typed ConfluenceContentAPI
 
 
 def test_a_title_resolves_to_the_page_id_the_graph_keys_pages_by() -> None:
@@ -100,13 +111,13 @@ def test_a_non_numeric_id_is_not_accepted_as_a_page_id() -> None:
 
 
 def test_the_title_is_quoted_into_the_cql_rather_than_interpolated_raw() -> None:
+    """The raw quote must not survive unescaped into the CQL expression."""
     content = _Content()
 
     _resolver(content).page_id_for_title("ENG", 'Weird " title')
 
     assert content.queries
     assert '"' in content.queries[0]
-    # The raw quote must not survive unescaped into the CQL expression.
     assert 'title = "Weird " title"' not in content.queries[0]
 
 
@@ -125,6 +136,15 @@ def test_a_failed_lookup_is_not_cached_as_a_missing_title() -> None:
     assert resolver.page_id_for_title("ENG", "Deploy Runbook") is None
     assert resolver.page_id_for_title("ENG", "Deploy Runbook") == "8891"
     assert content.queries == [cql, cql]
+
+
+def test_a_title_in_another_space_stays_unresolved_without_a_lookup() -> None:
+    """A page author must not learn which titles exist in spaces outside the connection."""
+    cql = 'space = "OPS" and title = "Payroll" and type = page'
+    content = _Content({cql: [{"id": "77"}]})
+
+    assert _resolver(content).page_id_for_title("OPS", "Payroll") is None
+    assert content.queries == []
 
 
 def test_the_lookup_is_constrained_to_pages() -> None:

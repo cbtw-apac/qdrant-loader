@@ -1,4 +1,16 @@
-"""SharePoint skip reasons, skip recording, and item-level error mapping."""
+"""SharePoint skip reasons, skip recording, item load errors and log entries.
+
+Log entries carry only IDs, reason codes and counts, never an item's
+``webUrl``, path, file name, page title or free-text detail, because a CV file
+name usually holds the candidate's name. ``ConnectorSkip`` records and the
+errors' ``url`` attributes keep the item's location as data for the caller.
+
+Typical usage example:
+
+    recorder = SharePointSkipRecorder(run_id)
+    recorder.record(EXCEEDS_SIZE_LIMIT, detail, item_id=item_id)
+    log_skip(ACCESS_DENIED, item_id=item_id, run_id=run_id)
+"""
 
 from __future__ import annotations
 
@@ -30,13 +42,17 @@ _TRANSIENT_STATUS = {429, 500, 502, 503, 504}
 
 
 class SharePointItemSkippedError(DocumentProcessingError, UnsupportedDocumentError):
-    """Raised when a direct load declines one item for a standard skip reason.
+    """A SharePoint item was skipped and will not be loaded.
 
-    The run treats it as a per-item, non-retryable failure, never a fatal one:
-    re-running the load cannot change an allowlist, size, extension, or access
-    decision. A deleted item and exhausted retries raise
-    :class:`SharePointItemMissingError` and :class:`SharePointItemUnavailableError`
-    instead. The ``skip_reason`` attribute carries the machine-readable reason code.
+    The run records it as a per-item failure and continues. Retrying does not
+    help, because the skip reason stays the same until the item or the
+    connector configuration changes.
+
+    Args:
+        reason: Skip reason code.
+        detail: Why the item was skipped.
+        item_id: Graph ID of the item, if known.
+        url: The item's ``webUrl``, if known. Not included in the message.
     """
 
     def __init__(
@@ -47,7 +63,6 @@ class SharePointItemSkippedError(DocumentProcessingError, UnsupportedDocumentErr
         item_id: str | None = None,
         url: str | None = None,
     ) -> None:
-        """Keep the reason and item identity next to the human message."""
         super().__init__(f"{reason}: {detail}")
         self.skip_reason = reason
         self.item_id = item_id
@@ -55,10 +70,15 @@ class SharePointItemSkippedError(DocumentProcessingError, UnsupportedDocumentErr
 
 
 class SharePointItemMissingError(ItemNotFoundError):
-    """Raised when a direct load finds the item gone (Graph answered HTTP 404).
+    """A SharePoint item was deleted or moved after discovery listed it.
 
-    Classified as a missing source item, like Jira and Confluence, rather than
-    as an unsupported document: it was deleted or moved after discovery listed it.
+    It counts as a missing source item, not as an unsupported document. Its
+    ``skip_reason`` is ``DELETED``.
+
+    Args:
+        detail: Graph's error detail.
+        item_id: Graph ID of the item, if known.
+        url: The item's ``webUrl``, if known. Not included in the message.
     """
 
     def __init__(
@@ -68,7 +88,6 @@ class SharePointItemMissingError(ItemNotFoundError):
         item_id: str | None = None,
         url: str | None = None,
     ) -> None:
-        """Keep the DELETED reason and item identity next to the human message."""
         super().__init__(f"{DELETED}: {detail}", status_code=404)
         self.skip_reason = DELETED
         self.item_id = item_id
@@ -76,12 +95,20 @@ class SharePointItemMissingError(ItemNotFoundError):
 
 
 class SharePointItemUnavailableError(FetchError, SourceRetriesExhaustedError):
-    """Raised when Graph still throttles or fails one item after ``max_retries``.
+    """Graph still throttled or failed a SharePoint item after every retry.
 
-    ``max_retries`` is the whole retry budget for the item, so the run skips it
-    rather than retrying it again. A 429 or 5xx says nothing about the
-    document itself, so it stays a transient failure: a later run or a blanket
-    retry of failed documents picks it up, unlike an unsupported document.
+    The run skips the item without retrying it again. It stays a transient
+    failure, so a later run or a retry of failed documents picks it up. Its
+    ``skip_reason`` is ``TRANSIENT_ERROR_MAX_RETRIES``.
+
+    Args:
+        detail: Graph's error detail.
+        status_code: HTTP status of the last attempt, if known.
+        item_id: Graph ID of the item, if known.
+        url: The item's ``webUrl``, if known. Not included in the message.
+
+    Attributes:
+        retryable: Always ``False``, since ``max_retries`` already ran out.
     """
 
     retryable = False
@@ -94,7 +121,6 @@ class SharePointItemUnavailableError(FetchError, SourceRetriesExhaustedError):
         item_id: str | None = None,
         url: str | None = None,
     ) -> None:
-        """Keep the TRANSIENT_ERROR_MAX_RETRIES reason and item identity."""
         super().__init__(f"{TRANSIENT_ERROR_MAX_RETRIES}: {detail}", status_code=status_code)
         self.skip_reason = TRANSIENT_ERROR_MAX_RETRIES
         self.item_id = item_id
@@ -108,7 +134,19 @@ def item_load_error(
     item_id: str | None = None,
     url: str | None = None,
 ) -> Exception:
-    """Return the typed error a direct load raises for one item-level failure."""
+    """Return the typed error for one item that failed to load.
+
+    Args:
+        reason: Skip reason from ``skip_reason_for_error``.
+        error: Graph failure for the item.
+        item_id: Graph ID of the item, if known.
+        url: The item's ``webUrl``, kept on the error for the caller.
+
+    Returns:
+        ``SharePointItemMissingError`` for ``DELETED``,
+        ``SharePointItemUnavailableError`` for exhausted retries, and
+        ``SharePointItemSkippedError`` for any other reason.
+    """
     detail = str(error)
     if reason == DELETED:
         return SharePointItemMissingError(detail, item_id=item_id, url=url)
@@ -121,10 +159,14 @@ def item_load_error(
 
 
 def skip_reason_for_error(error: Exception) -> str | None:
-    """Map an item-level Graph failure to a standard skip reason.
+    """Map an item-level Graph failure to a skip reason.
 
-    Returns ``None`` for failures that are not about one item, so callers
-    re-raise them instead of skipping.
+    Args:
+        error: Failure raised while fetching or listing one item.
+
+    Returns:
+        The skip reason, or ``None`` when the failure is not about one item.
+        Callers re-raise those instead of skipping.
     """
     if isinstance(error, AuthorizationError):
         return ACCESS_DENIED
@@ -139,20 +181,24 @@ def skip_reason_for_error(error: Exception) -> str | None:
 
 
 class SharePointSkipRecorder:
-    """Collect and log the items one discovery traversal declined."""
+    """Collect the items one discovery traversal skipped, and log each by ID.
+
+    Args:
+        run_id: Run ID that tags every skip log entry. The connector may
+            rebind it later.
+    """
 
     def __init__(self, run_id: str | None = None) -> None:
-        """Start with no recorded skips; ``run_id`` tags every skip log entry."""
         self.run_id = run_id
         self._skips: dict[tuple[str, str], ConnectorSkip] = {}
 
     @property
     def skipped(self) -> tuple[ConnectorSkip, ...]:
-        """Return skips in the order they were recorded."""
+        """Skips in the order they were recorded."""
         return tuple(self._skips.values())
 
     def counts_by_reason(self) -> dict[str, int]:
-        """Return how many items were skipped for each standard reason."""
+        """Return how many items were skipped for each reason."""
         return dict(Counter(skip.reason for skip in self._skips.values()))
 
     def reset(self) -> None:
@@ -168,7 +214,18 @@ class SharePointSkipRecorder:
         url: str | None = None,
         path: str | None = None,
     ) -> None:
-        """Record one skip once per item and reason, and log it."""
+        """Record one skip and log its reason and item ID.
+
+        Recording the same item and reason again does nothing.
+
+        Args:
+            reason: Skip reason code.
+            detail: Why the item was skipped, kept on the ``ConnectorSkip`` only.
+            item_id: Graph ID of the item, if known.
+            url: The item's ``webUrl``, kept on the ``ConnectorSkip`` only.
+            path: The item's drive path, or the rejected tenant or site, kept on
+                the ``ConnectorSkip`` only.
+        """
         identity = item_id or url or path or detail
         key = (identity, reason)
         if key in self._skips:
@@ -180,38 +237,39 @@ class SharePointSkipRecorder:
             item_id=item_id,
             url=url,
         )
-        log_skip(reason, detail, item_id=item_id, url=url, run_id=self.run_id)
+        log_skip(reason, item_id=item_id, run_id=self.run_id)
 
 
-def log_skip(
-    reason: str,
-    detail: str,
-    *,
-    item_id: str | None = None,
-    url: str | None = None,
-    run_id: str | None = None,
-) -> None:
-    """Emit one skip log entry with its reason, item identity, and detail."""
+def log_skip(reason: str, *, item_id: str | None = None, run_id: str | None = None) -> None:
+    """Emit one ``sharepoint.item_skipped`` warning with the reason and item ID only.
+
+    Args:
+        reason: Skip reason code.
+        item_id: Graph ID of the skipped item, if known.
+        run_id: Run ID that tags the entry.
+    """
     log_event(
         logging.WARNING,
         "sharepoint.item_skipped",
         run_id=run_id,
         skip_reason=reason,
         item_id=item_id,
-        url=url,
-        detail=detail,
     )
 
 
 def log_event(level: int, event: str, *, run_id: str | None, **fields: object) -> None:
     """Emit one structured SharePoint log entry as a single JSON object.
 
-    The message itself is JSON so the entry stays machine-readable whatever
-    formatter the host process installs; the same fields are attached as
-    ``extra`` for handlers that read record attributes.
+    The same fields also go in ``extra`` with a ``sharepoint_`` prefix, so none
+    collides with a ``LogRecord`` attribute.
+
+    Args:
+        level: ``logging`` level of the entry.
+        event: Event name, such as ``sharepoint.discovery_summary``.
+        run_id: Run ID that tags the entry.
+        **fields: IDs, reason codes and counts only. Never a URL, path, name,
+            title or document text.
     """
     payload = {"event": event, "run_id": run_id, **fields}
-    # ``logging`` refuses ``extra`` keys that collide with LogRecord attributes,
-    # so every attached field carries a provider prefix.
     extra = {f"sharepoint_{key}": value for key, value in payload.items()}
     logger.log(level, json.dumps(payload, default=str, sort_keys=True), extra=extra)

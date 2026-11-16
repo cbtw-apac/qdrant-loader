@@ -1,4 +1,14 @@
-"""Validated configuration for SharePoint site connectors."""
+"""Validated configuration for SharePoint site connectors.
+
+``SharePointSiteConfig`` runs every startup check when it is built, so a
+connector or Graph client can trust its values. It holds settings only and
+never calls Graph.
+
+Typical usage example:
+
+    config = SharePointSiteConfig(site_url=site_url, access_token=token)
+    connector = SharePointConnector(config)
+"""
 
 from __future__ import annotations
 
@@ -25,6 +35,7 @@ from .config_validation import (
     validate_extensions,
     validate_positive_limit,
     validate_scope,
+    validate_site_location,
     validate_site_url,
 )
 from .delegated import default_token_cache_path
@@ -39,8 +50,6 @@ class SharePointAuthMode(StrEnum):
     DEVICE_CODE = "device_code"
 
 
-# Fallbacks for fields a connection omits. Deployments set these per connection
-# under `settings` in config/sources/connectors.yaml; see config/sources/connectors.example.yaml.
 DEFAULT_GRAPH_API_URL = "https://graph.microsoft.com/v1.0"
 DEFAULT_MAX_FILE_SIZE_BYTES = DEFAULT_MAX_DOCUMENT_BYTES
 DEFAULT_ALLOWED_EXTENSIONS = frozenset(SHARED_ALLOWED_EXTENSIONS)
@@ -48,35 +57,48 @@ DEFAULT_ALLOWED_EXTENSIONS = frozenset(SHARED_ALLOWED_EXTENSIONS)
 
 @dataclass(slots=True)
 class SharePointSiteConfig:
-    """Configuration for one SharePoint crawl scope.
+    """Settings for one SharePoint crawl scope, validated when built.
 
-    A site can be addressed directly by ``site_id`` or parsed from ``site_url``.
-    The crawl scope is then one of:
+    The scope is a whole site, one document library, a folder in it, or
+    explicit files. Site and drive values go into Graph URL paths unquoted, so
+    each must stay inside its path segment. Delegated ``device_code`` access is
+    never inferred and must be chosen explicitly.
 
-    * the whole site: ``crawl_all_drives`` walks every document library;
-    * one document library: the default drive, ``drive_id``, or ``drive_name``;
-    * one folder: ``root_path`` inside that library, recursive unless
-      ``recursive`` is off;
-    * explicit files: ``item_ids`` inside that library.
-
-    Allowlists (``allowed_tenant_ids``, ``allowed_sites``,
-    ``allowed_path_prefixes``) are optional. When set, an item must pass every
-    one of them before its content is downloaded.
-
-    ``include_pages`` additionally discovers the site's modern pages. It is
-    off by default so existing connections keep ingesting exactly the files
-    they did before, and so a site owner opts in to page content explicitly.
-
-    ``auth_mode`` selects how Graph tokens are obtained:
-
-    * ``access_token``: a pre-issued token, used as-is;
-    * ``client_credentials``: app-only, with ``client_secret``;
-    * ``device_code``: delegated, as the user who signed in with the
-      ``sharepoint.login`` command; its refresh token lives in
-      ``token_cache_path``.
-
-    When unset it is inferred from the credentials present, which never
-    selects ``device_code``: delegated access must be chosen explicitly.
+    Attributes:
+        site_url: Site URL, parsed into ``hostname`` and ``site_path``.
+        hostname: SharePoint host name.
+        site_path: Site path below the host, empty for the root site.
+        site_id: Graph site ID, used instead of ``site_url``.
+        drive_id: Document library to crawl, by Graph ID.
+        drive_name: Document library to crawl, by name.
+        root_path: Folder inside the library to crawl.
+        item_ids: Drive item IDs to load instead of walking a folder.
+        crawl_all_drives: Crawl every document library of the site.
+        recursive: Walk subfolders too.
+        allowed_tenant_ids: Allowed Microsoft tenant IDs, or ``None`` for any.
+        allowed_sites: Allowed site IDs or URLs, or ``None`` for any.
+        allowed_path_prefixes: Allowed drive path prefixes, or ``None`` for any.
+        access_token: Pre-issued Graph token. Secret, kept out of ``repr``.
+        tenant_id: Microsoft Entra tenant ID used to request tokens.
+        client_id: Client ID of the app registration.
+        client_secret: App secret for client credentials. Secret, kept out of ``repr``.
+        auth_mode: How Graph tokens are obtained, inferred when unset.
+        token_cache_path: Where the device-code refresh token is cached.
+        harborrag_tenant_id: HarborRAG tenant that scopes the default token cache.
+        graph_api_url: Microsoft Graph base URL, HTTPS only.
+        allowed_extensions: File extensions to load.
+        excluded_extensions: File extensions to skip.
+        include_hidden: Also load items Graph marks hidden.
+        include_pages: Also load the site's modern pages. Off by default.
+        process_file_callback: Gets a file's name, size and MIME type and
+            returns whether to load it, with a reason.
+        max_file_size_bytes: Largest file to download, or ``None`` for no limit.
+        fail_on_error: Re-raise a ``process_file_callback`` error instead of skipping.
+        requests_per_minute: Graph request rate, from 1 to 6000.
+        page_size: Items per Graph page, from 1 to 999.
+        request_timeout_seconds: Timeout of one Graph request, in seconds.
+        max_retries: Retries of one failed Graph request.
+        backoff_factor: Base retry delay in seconds, doubled per attempt.
     """
 
     site_url: str | None = None
@@ -92,10 +114,10 @@ class SharePointSiteConfig:
     allowed_tenant_ids: set[str] | None = None
     allowed_sites: set[str] | None = None
     allowed_path_prefixes: list[str] | None = None
-    access_token: str | None = field(default=None, repr=False)  # secret
+    access_token: str | None = field(default=None, repr=False)
     tenant_id: str | None = None
     client_id: str | None = None
-    client_secret: str | None = field(default=None, repr=False)  # secret
+    client_secret: str | None = field(default=None, repr=False)
     auth_mode: SharePointAuthMode | str | None = None
     token_cache_path: str | None = None
     harborrag_tenant_id: str | None = None
@@ -114,7 +136,11 @@ class SharePointSiteConfig:
     backoff_factor: float = 0.5
 
     def __post_init__(self) -> None:
-        """Resolve site/auth shortcuts and validate paging and size limits."""
+        """Resolve site and auth shortcuts, then validate every setting.
+
+        Raises:
+            ValueError: A setting is missing, contradictory or unsafe.
+        """
         self.graph_api_url = self.graph_api_url.rstrip("/")
         validate_https_url("graph_api_url", self.graph_api_url)
 
@@ -129,6 +155,12 @@ class SharePointSiteConfig:
             raise ValueError(
                 "SharePoint config requires either site_id or site_url/hostname/site_path"
             )
+        validate_site_location(
+            hostname=self.hostname,
+            site_path=self.site_path,
+            site_id=self.site_id,
+            drive_id=self.drive_id,
+        )
         self._resolve_auth_mode()
         validate_http_tuning(
             requests_per_minute=self.requests_per_minute,
@@ -150,6 +182,7 @@ class SharePointSiteConfig:
         self._normalize_scope_and_allowlists()
 
     def _resolve_auth_mode(self) -> None:
+        """Infer or parse ``auth_mode`` and require the credentials it needs."""
         if self.auth_mode is None:
             if self.access_token:
                 self.auth_mode = SharePointAuthMode.ACCESS_TOKEN
@@ -177,10 +210,10 @@ class SharePointSiteConfig:
             self.token_cache_path = str(self._token_cache())
 
     def _token_cache(self) -> Path:
-        """Return the explicit cache path, or the default inside the HarborRAG tenant's folder.
+        """Return where the device-code refresh token is cached.
 
-        Raises:
-            ValueError: No path is set and no HarborRAG tenant is known to scope the default.
+        An explicit ``token_cache_path`` wins. Otherwise the default sits in the
+        HarborRAG tenant's folder, so ``harborrag_tenant_id`` must be set.
         """
         if self.token_cache_path:
             return Path(self.token_cache_path).expanduser()
@@ -191,6 +224,7 @@ class SharePointSiteConfig:
         )
 
     def _normalize_scope_and_allowlists(self) -> None:
+        """Trim ``item_ids``, reject contradictory scopes and normalize the allowlists."""
         if self.item_ids is not None:
             self.item_ids = [str(value).strip() for value in self.item_ids if str(value).strip()]
         validate_scope(

@@ -1,28 +1,22 @@
-"""Pure URL, query, and payload helpers for Confluence."""
+"""CQL, search-parameter and content-ID helpers for the Confluence connector.
+
+Pure functions with no I/O. Every caller-supplied value reaches CQL through
+``quote_cql`` or ``validate_token``; the one exception, ``build_cql``'s raw CQL,
+is held inside the configured space by ``require_self_contained_query``. That
+space is a tenant-isolation boundary, not a convenience default.
+
+Start from: build_cql, build_search_params.
+"""
 
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from harborrag_adapters.connectors.atlassian.query import is_cloud_hostname as is_cloud_hostname
-
-
-def format_query_timestamp(value: datetime) -> str:
-    """Render a datetime for CQL/JQL as UTC ``yyyy/MM/dd HH:mm``.
-
-    Bare CQL/JQL timestamps are interpreted in the API user's configured
-    timezone, so a naive local-time render silently shifts the incremental-sync
-    watermark by that offset (missing or re-ingesting documents). We normalize
-    to UTC — deployments must set the integration account's timezone to UTC (and
-    ideally apply a safety-overlap window) for exact incremental behavior.
-    """
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    return value.astimezone(UTC).strftime("%Y/%m/%d %H:%M")
-
+from harborrag_adapters.connectors.atlassian.query import require_self_contained_query
 
 CONTENT_EXPAND = (
     "body.storage,body.export_view,version,metadata.labels,history,space,"
@@ -36,10 +30,30 @@ DEFAULT_PAGE_SIZE = 25
 
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _CONTENT_ID_RE = re.compile(r"^[0-9]+$")
+_DEFAULT_CQL = 'type in ("page","blogpost")'
+
+
+def format_query_timestamp(value: datetime) -> str:
+    """Render a datetime as the UTC ``yyyy/MM/dd HH:mm`` timestamp CQL compares against.
+
+    Confluence reads a bare CQL timestamp in the API user's timezone, so a local
+    render would shift the incremental-sync watermark by that offset and miss or
+    re-ingest documents. Deployments must set the integration account's timezone
+    to UTC, ideally with a safety-overlap window, for exact incremental behaviour.
+
+    Args:
+        value: Watermark to render; a naive value is taken as UTC.
+
+    Returns:
+        The watermark as ``yyyy/MM/dd HH:mm`` in UTC.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).strftime("%Y/%m/%d %H:%M")
 
 
 def extract_cursor(next_url: str | None) -> str | None:
-    """Extract Confluence Cloud cursor pagination from a next link."""
+    """Return the Cloud pagination cursor from a search response's next link, if any."""
     if not next_url:
         return None
     values = parse_qs(urlparse(next_url).query).get("cursor")
@@ -53,7 +67,18 @@ def quote_cql(value: str) -> str:
 
 
 def validate_token(value: str, *, field_name: str) -> str:
-    """Validate simple CQL tokens that should never contain operators."""
+    """Return a space key, content type or label that is safe to put in CQL.
+
+    Args:
+        value: Token to check.
+        field_name: What the token is, named in the error message.
+
+    Returns:
+        ``value`` unchanged.
+
+    Raises:
+        ValueError: ``value`` holds anything but letters, digits, underscore and hyphen.
+    """
     if not _TOKEN_RE.fullmatch(value):
         raise ValueError(
             f"Invalid Confluence {field_name}: only letters, numbers, "
@@ -63,7 +88,17 @@ def validate_token(value: str, *, field_name: str) -> str:
 
 
 def validate_content_id(value: str) -> str:
-    """Require the numeric IDs accepted by Confluence content paths."""
+    """Return a content ID that is safe to put in a Confluence REST path.
+
+    Args:
+        value: Content ID; surrounding whitespace is removed.
+
+    Returns:
+        The ID without surrounding whitespace.
+
+    Raises:
+        ValueError: The ID is not all digits.
+    """
     normalized = str(value).strip()
     if not _CONTENT_ID_RE.fullmatch(normalized):
         raise ValueError("Invalid Confluence content ID: expected digits only")
@@ -73,30 +108,42 @@ def validate_content_id(value: str) -> str:
 def build_cql(
     *,
     space_key: str | None = None,
-    content_types: list[str] | None = None,
-    labels: list[str] | None = None,
+    content_types: Sequence[str] | None = None,
+    labels: Sequence[str] | None = None,
     updated_after: datetime | None = None,
     text_search: str | None = None,
     raw_cql: str | None = None,
 ) -> str:
-    """Build a conservative CQL search expression from shared filters.
+    """Build the CQL search expression for one discovery query.
 
-    ``text_search`` is a free-text term (e.g. a caller-supplied search
-    string) and is always escaped via ``quote_cql`` into a ``text ~ "..."``
-    clause combined with the other allowlisted filters. It is never treated
-    as raw CQL -- only the explicit ``raw_cql`` escape hatch bypasses
-    escaping and the type/label allowlists, for callers who intentionally
-    need full CQL control. Even then, the configured space is always ANDed
-    back in: ``_cql_from_query`` already proves the caller's requested space
-    matches this connection's configured space before calling here, and
-    ``raw_cql`` must never be able to undo that -- the connector's space
-    scope is a tenant-isolation boundary, not a convenience default.
+    The filters are allowlisted tokens joined with ``and``; ``text_search`` is
+    always escaped into a ``text ~ "..."`` clause and never read as CQL. Only
+    ``raw_cql`` skips the type and label allowlists, for callers that need full
+    CQL, and even then the space stays mandatory: ``raw_cql`` must be one
+    self-contained expression and is ANDed with ``space = <space_key>`` at the
+    top level, so it can never reach another space. The ``ValueError`` of
+    ``validate_token`` or ``require_self_contained_query`` passes through when a
+    space key, content type or label is malformed, or when ``raw_cql`` could
+    reach outside its parentheses.
+
+    Args:
+        space_key: The connection's configured space; the caller has already
+            checked that the query asks for no other space.
+        content_types: Content types to match, such as ``page``.
+        labels: Labels of which the content must carry at least one.
+        updated_after: Incremental-sync watermark.
+        text_search: Free-text term, always escaped.
+        raw_cql: Full CQL used instead of the other filters, kept inside
+            ``space_key`` when one is given.
+
+    Returns:
+        The CQL expression; pages and blog posts when no filter is given.
     """
     if raw_cql:
-        if space_key:
-            safe_space = validate_token(space_key, field_name="space key")
-            return f"({raw_cql}) and space = {quote_cql(safe_space)}"
-        return raw_cql
+        if not space_key:
+            return raw_cql
+        safe_space = validate_token(space_key, field_name="space key")
+        return f"({require_self_contained_query(raw_cql)}) and space = {quote_cql(safe_space)}"
 
     clauses: list[str] = []
     if space_key:
@@ -115,7 +162,7 @@ def build_cql(
     if text_search:
         clauses.append(f"text ~ {quote_cql(text_search)}")
 
-    return " and ".join(clauses) or 'type in ("page","blogpost")'
+    return " and ".join(clauses) or _DEFAULT_CQL
 
 
 def build_search_params(
@@ -125,9 +172,20 @@ def build_search_params(
     start: int | None = None,
     cursor: str | None = None,
     expand: str = LIGHT_EXPAND,
-) -> dict[str, Any]:
-    """Build Confluence search params for cursor or offset pagination."""
-    params: dict[str, Any] = {"cql": cql, "limit": limit, "expand": expand}
+) -> dict[str, str | int]:
+    """Build the query parameters of one Confluence ``content/search`` page.
+
+    Args:
+        cql: Search expression from ``build_cql``.
+        limit: Results per page.
+        start: Data Center result offset; ignored when ``cursor`` is given.
+        cursor: Cloud cursor from ``extract_cursor``.
+        expand: Fields to expand on each result.
+
+    Returns:
+        The search query parameters, paged by cursor when one is given.
+    """
+    params: dict[str, str | int] = {"cql": cql, "limit": limit, "expand": expand}
     if cursor:
         params["cursor"] = cursor
     elif start is not None:

@@ -76,14 +76,23 @@ for the full artifact, projection, verification and publication path.
 
 ### Narrow a run
 
-`harborrag ingest start` and `harborrag ingest run` can narrow one run:
+`harborrag ingest start` and `harborrag ingest run` can narrow one run. They never widen
+what the connection reads:
 
 - `--path`: a path inside the connector's source root; for a local folder, relative to
-  its `source_path`.
+  its `source_path`. A GitHub or SharePoint path must also stay inside the connection's
+  `root_path`, and `/` keeps that root.
 - `--pattern`: a case-insensitive substring, or a glob matched against the path relative
   to the source root.
-- `--filters-json`: connector filters as a JSON object; a local folder connection
-  rejects unknown keys.
+- `--filters-json`: connector filters as a JSON object. They narrow the connection's own
+  filters: include and allow lists apply on top of the connection's, and exclude lists
+  add to them. A Jira `jql` is combined with the connection's `jql` by `AND`, and Jira
+  `project_keys` must be among the connection's `project_keys` when it lists any. A
+  local folder connection rejects unknown keys.
+
+A value that would reach outside the connection fails the run. Examples are a `..` path
+segment, an item ID longer than one path segment, or raw CQL or JQL that closes a
+parenthesis it did not open.
 
 `source sync` does not take these options. The HTTP body takes `updated_after` instead,
 to re-read the items changed since a date-time; see

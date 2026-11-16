@@ -21,8 +21,10 @@ supports PPTX/PPTM, legacy PPT, DOCX, legacy DOC, ODT, Excel (including legacy X
 CSV/TSV, images, HTML/XHTML, EPUB, JSON/JSONL/NDJSON, Markdown/MDX, PDFs, and plain
 text, source and config formats.
 
-An enabled definition in `parsers.yaml` replaces the matching parser type in that
-default stack. Parser types the file does not configure stay available.
+An enabled definition in `parsers.yaml` replaces only the engine for its own formats
+in that default stack. For example, a `docx` definition replaces the DOCX engine, and
+DOC, ODT and EPUB files keep their default engines. A `pdf` definition replaces the
+whole PDF parser. Formats the file does not configure stay available.
 
 ### Legacy Microsoft Office binary formats
 
@@ -241,8 +243,10 @@ image = catalog.build("image-liteparse")
 parser_registry = catalog.build_harbor_parser()
 ```
 
-Only one enabled definition may replace a given parser type. `build_harbor_parser()`
-rejects conflicting enabled definitions instead of choosing silently.
+Each parser family takes at most one enabled definition: `docx` and `epub` share the
+document family, `csv` and `excel` the spreadsheet family, and `html` and `markdown`
+the markup family. `build_harbor_parser()` rejects conflicting enabled definitions
+instead of choosing silently.
 
 Code overrides take precedence over YAML settings:
 
