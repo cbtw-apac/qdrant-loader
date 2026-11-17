@@ -2,6 +2,12 @@
 
 Revision ID: 0009
 Revises: 0008
+
+Phase: expand
+Reversible: yes; the downgrade drops both tables and their rows
+Touches: conversation_sessions, conversation_memory (new)
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on both tables to drop them
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ _INDEX = "ix_conversation_memory_identity_created"
 
 
 def upgrade() -> None:
+    """Create the conversation session and memory tables."""
     op.create_table(
         "conversation_sessions",
         sa.Column("session_id", sa.String(length=128), nullable=False),
@@ -51,6 +58,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the conversation memory and session tables."""
     op.drop_index(_INDEX, table_name="conversation_memory")
     op.drop_table("conversation_memory")
     op.drop_table("conversation_sessions")

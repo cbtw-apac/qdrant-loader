@@ -136,12 +136,12 @@ llm = [
 ]
 langfuse = ["langfuse>=4,<5"]
 opentelemetry = [
-    "opentelemetry-api>=1.45.1,<2",
+    "opentelemetry-api>=1.45.2,<2",
     "opentelemetry-sdk>=1.45.1,<2",
 ]
 test = [
     "litellm>=1.106.0,<1.106.5",
-    "opentelemetry-api>=1.45.1,<2",
+    "opentelemetry-api>=1.45.2,<2",
     "opentelemetry-sdk>=1.45.1,<2",
     "Pillow>=10.0.0",
     "pytesseract>=0.3.13",

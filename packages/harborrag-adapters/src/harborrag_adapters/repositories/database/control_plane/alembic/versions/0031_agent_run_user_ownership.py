@@ -16,6 +16,14 @@ is unchanged.
 
 Revision ID: 0031
 Revises: 0030
+
+Phase: expand, data and contract in one revision
+Reversible: yes; the downgrade drops agent_runs.user_id and restores the tenant index
+Touches: agent_runs; user_id backfilled from principal_id on every row
+Locks: ACCESS EXCLUSIVE lock on agent_runs from the index drop until the migration run commits,
+       covering the backfill of every row, the NOT NULL change and the index build. SQLite
+       copies agent_runs.
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -36,12 +44,12 @@ _IX_USER_SESSION = "ix_agent_runs_user_session"
 
 def _backfill() -> None:
     """Existing runs were scoped by the credential, so it is their owner."""
-
     runs = sa.table(_TABLE, sa.column("user_id"), sa.column("principal_id"))
     op.execute(runs.update().values(user_id=runs.c.principal_id))
 
 
 def upgrade() -> None:
+    """Add agent_runs.user_id, backfill it and index runs by user and session."""
     # Drop the tenant-only index before the batch rebuild so SQLite's table
     # copy never has to recreate an index while the table is being altered.
     op.drop_index(_IX_TENANT, table_name=_TABLE)
@@ -55,6 +63,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop agent_runs.user_id and restore the tenant index."""
     op.drop_index(_IX_USER_SESSION, table_name=_TABLE)
     with op.batch_alter_table(_TABLE) as batch:
         batch.drop_column("user_id")

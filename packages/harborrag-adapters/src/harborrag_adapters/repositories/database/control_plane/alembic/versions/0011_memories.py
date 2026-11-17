@@ -2,6 +2,12 @@
 
 Revision ID: 0011
 Revises: 0010
+
+Phase: expand
+Reversible: yes; the downgrade drops memories and its rows
+Touches: memories (new)
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on memories to drop it
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ _IX_OWNER = "ix_memories_owner"
 
 
 def upgrade() -> None:
+    """Create the memories table and its indexes."""
     op.create_table(
         "memories",
         sa.Column("memory_id", sa.String(length=128), nullable=False),
@@ -51,6 +58,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the memories table and its indexes."""
     op.drop_index(_IX_OWNER, table_name="memories")
     op.drop_index(_IX_TENANT, table_name="memories")
     op.drop_index(_IX_TYPE, table_name="memories")

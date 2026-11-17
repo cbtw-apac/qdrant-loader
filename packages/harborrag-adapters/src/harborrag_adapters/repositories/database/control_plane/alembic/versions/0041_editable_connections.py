@@ -12,6 +12,16 @@ The field layout below is frozen at this revision on purpose.
 
 Revision ID: 0041
 Revises: 0040
+
+Phase: expand, data and contract in one revision
+Reversible: partly; the downgrade folds credentials, config and tuning back into config_json and
+            drops the new columns, but a paused source stays active, a jira_cloud source stays
+            jira, and needs_reauth and deleting sources become error
+Touches: sources; every row rewritten
+Locks: ACCESS EXCLUSIVE lock on sources from the first ADD COLUMN until the migration run
+       commits, so reads and writes of sources wait through the rewrite of every row, the NOT
+       NULL changes and the unique constraints. SQLite copies sources.
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -256,6 +266,7 @@ def _restore(bind: sa.engine.Connection) -> None:
 
 
 def upgrade() -> None:
+    """Add the connection columns to sources and backfill them from each stored row."""
     with op.batch_alter_table(_TABLE) as batch:
         for name, column_type in _NEW_REQUIRED:
             batch.add_column(sa.Column(name, column_type, nullable=True))
@@ -270,6 +281,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Restore each source's legacy config and drop the connection columns."""
     _restore(op.get_bind())
     with op.batch_alter_table(_TABLE) as batch:
         for name in _UNIQUE:

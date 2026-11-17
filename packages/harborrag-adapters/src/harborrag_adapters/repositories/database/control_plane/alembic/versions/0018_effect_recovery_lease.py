@@ -9,6 +9,12 @@ drain.
 
 Revision ID: 0018
 Revises: 0017
+
+Phase: data
+Reversible: yes; the downgrade deletes the seeded row
+Touches: singleton_leases, one row
+Locks: none
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ _LEASE_NAME = "control_plane_effect_recovery"
 
 
 def upgrade() -> None:
+    """Seed the lease row for pending-effect recovery."""
     op.bulk_insert(
         _SINGLETON_LEASES,
         [
@@ -49,4 +56,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Delete the lease row for pending-effect recovery."""
     op.execute(_SINGLETON_LEASES.delete().where(_SINGLETON_LEASES.c.name == _LEASE_NAME))

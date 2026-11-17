@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from alembic import command
 from sqlalchemy import create_engine, inspect, text
 
@@ -11,10 +12,13 @@ from harborrag_adapters.repositories.database.ingestion_control.topology.schema 
     TOPOLOGY_POLICIES,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def test_permission_migration_preserves_legacy_jobs_but_does_not_grant_access(
     tmp_path: Path,
 ) -> None:
+    """Migration 0022 keeps legacy topology jobs and grants no permission by itself."""
     path = tmp_path / "legacy-topology.db"
     config = _build_config(f"sqlite+aiosqlite:///{path}")
     command.upgrade(config, "0021")
@@ -62,7 +66,6 @@ def test_published_graph_conflicts_schema_upgrades_to_the_current_head(
     tmp_path: Path,
 ) -> None:
     """A database stamped with dev's published 0020 must run every new migration."""
-
     path = tmp_path / "published-0020.db"
     dsn = f"sqlite+aiosqlite:///{path}"
     config = _build_config(dsn)
@@ -88,7 +91,7 @@ def test_published_graph_conflicts_schema_upgrades_to_the_current_head(
         with engine.connect() as connection:
             assert (
                 connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-                == "0047"
+                == "0048"
             )
             assert (
                 connection.execute(
@@ -105,6 +108,7 @@ def test_published_graph_conflicts_schema_upgrades_to_the_current_head(
 def test_migration_adds_topology_tables_and_round_trips_without_document_loss(
     tmp_path: Path,
 ) -> None:
+    """The topology tables appear on upgrade and a round trip loses no document."""
     path = tmp_path / "migration.db"
     dsn = f"sqlite+aiosqlite:///{path}"
     config = _build_config(dsn)

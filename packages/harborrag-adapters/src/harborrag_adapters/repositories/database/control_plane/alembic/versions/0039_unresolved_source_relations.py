@@ -2,6 +2,14 @@
 
 Revision ID: 0039
 Revises: 0038
+
+Phase: expand
+Reversible: yes; the downgrade drops the table and its rows
+Touches: unresolved_source_relations (new)
+Locks: creating the table takes a SHARE ROW EXCLUSIVE lock on documents for its foreign key, so
+       document writes wait until the migration run commits; the downgrade takes an ACCESS
+       EXCLUSIVE lock on unresolved_source_relations to drop it
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -19,6 +27,7 @@ _INDEX = "ix_unresolved_source_relations_target"
 
 
 def upgrade() -> None:
+    """Create unresolved_source_relations and its target index."""
     op.create_table(
         _TABLE,
         sa.Column(
@@ -45,5 +54,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop unresolved_source_relations and its target index."""
     op.drop_index(_INDEX, table_name=_TABLE)
     op.drop_table(_TABLE)

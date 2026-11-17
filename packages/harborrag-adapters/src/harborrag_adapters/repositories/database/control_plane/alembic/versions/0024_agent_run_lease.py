@@ -9,6 +9,14 @@ Terminal statuses clear both columns.
 
 Revision ID: 0024
 Revises: 0023
+
+Phase: expand
+Reversible: yes; the downgrade drops the two lease columns
+Touches: agent_runs; nullable columns, no backfill
+Locks: ACCESS EXCLUSIVE lock on agent_runs, taken by the ALTER and held until the migration run
+       commits. On SQLite the downgrade copies agent_runs, so its write lock grows with table
+       size.
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -25,6 +33,7 @@ _TABLE = "agent_runs"
 
 
 def upgrade() -> None:
+    """Add the lease owner and expiry columns to agent_runs."""
     op.add_column(_TABLE, sa.Column("lease_owner", sa.Text(), nullable=True))
     op.add_column(
         _TABLE,
@@ -33,6 +42,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the lease owner and expiry columns from agent_runs."""
     with op.batch_alter_table(_TABLE) as batch:
         batch.drop_column("lease_expires_at")
         batch.drop_column("lease_owner")

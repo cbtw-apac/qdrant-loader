@@ -15,6 +15,14 @@ rename conversations sorted by real activity.
 
 Revision ID: 0028
 Revises: 0027
+
+Phase: expand, data and contract in one revision
+Reversible: yes; the downgrade drops user_id, title and updated_at with their values
+Touches: conversation_sessions, conversation_messages; user_id backfilled on every row
+Locks: ACCESS EXCLUSIVE lock on conversation_sessions, then on conversation_messages, each from
+       its first ALTER until the migration run commits, covering the backfill of every row, the
+       NOT NULL changes and the index builds. SQLite copies both tables.
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -60,6 +68,7 @@ def _backfill_messages() -> None:
 
 
 def upgrade() -> None:
+    """Add user ownership to conversation sessions and messages and backfill it."""
     # Columns arrive nullable so existing rows can be backfilled, then are
     # tightened through batch_alter_table -- SQLite has no ALTER COLUMN.
     op.add_column(_SESSIONS, sa.Column("user_id", _USER_ID, nullable=True))
@@ -87,6 +96,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop user ownership and restore the principal-keyed message index."""
     op.drop_index(_IX_MESSAGES_SESSION, table_name=_MESSAGES)
     op.drop_index(_IX_MESSAGES_USER, table_name=_MESSAGES)
     with op.batch_alter_table(_MESSAGES) as batch:

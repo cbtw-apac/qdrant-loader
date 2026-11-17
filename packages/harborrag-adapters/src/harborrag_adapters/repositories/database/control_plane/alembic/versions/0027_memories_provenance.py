@@ -9,6 +9,14 @@ extracted from, and ``content_hash`` supports dedupe of restatements.
 
 Revision ID: 0027
 Revises: 0026
+
+Phase: expand and data in one revision
+Reversible: yes; the downgrade drops the new columns and indexes
+Touches: memories; user_id backfilled from principal_id on every row
+Locks: ACCESS EXCLUSIVE lock on memories from the ADD COLUMN until the migration run commits,
+       covering the UPDATE of every row and both index builds. On SQLite the downgrade copies
+       memories.
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -39,6 +47,7 @@ _COLUMNS: tuple[sa.Column[Any], ...] = (
 
 
 def upgrade() -> None:
+    """Add the user, provenance and validity columns to memories and backfill user_id."""
     for column in _COLUMNS:
         op.add_column(_TABLE, column)
     memories = sa.table(_TABLE, sa.column("user_id"), sa.column("principal_id"))
@@ -48,6 +57,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the user, provenance and validity columns and their indexes."""
     op.drop_index(_IX_CONTENT_HASH, table_name=_TABLE)
     op.drop_index(_IX_TENANT_USER, table_name=_TABLE)
     with op.batch_alter_table(_TABLE) as batch:

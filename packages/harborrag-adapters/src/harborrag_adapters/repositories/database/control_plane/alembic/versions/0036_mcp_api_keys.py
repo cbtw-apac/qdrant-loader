@@ -2,6 +2,12 @@
 
 Revision ID: 0036
 Revises: 0035
+
+Phase: expand
+Reversible: yes; the downgrade drops mcp_api_keys and every stored key
+Touches: mcp_api_keys (new)
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on mcp_api_keys to drop it
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """Create mcp_api_keys and its tenant and owner index."""
     op.create_table(
         "mcp_api_keys",
         sa.Column("key_id", sa.String(24), primary_key=True),
@@ -40,4 +47,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop mcp_api_keys."""
     op.drop_table("mcp_api_keys")

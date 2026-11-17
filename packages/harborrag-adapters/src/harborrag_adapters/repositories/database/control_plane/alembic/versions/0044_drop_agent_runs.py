@@ -3,6 +3,14 @@
 Revision ID: 0044
 Revises: 0043
 
+Phase: contract
+Reversible: no, because the downgrade restores an empty agent_runs and the dropped rows are gone
+Touches: agent_runs; dropped with every stored checkpoint
+Locks: ACCESS EXCLUSIVE lock on agent_runs to drop it, held until the migration run commits; the
+       downgrade takes a SHARE ROW EXCLUSIVE lock on conversation_sessions for the restored
+       foreign key
+Deploy: after the application release
+
 The upgrade deletes every stored checkpoint. The downgrade restores the empty
 0043 table shape only; the dropped rows cannot be recovered.
 """
@@ -24,10 +32,12 @@ _IX_USER_SESSION = "ix_agent_runs_user_session"
 
 
 def upgrade() -> None:
+    """Drop agent_runs and every stored checkpoint."""
     op.drop_table(_TABLE)
 
 
 def downgrade() -> None:
+    """Recreate an empty agent_runs with its indexes."""
     op.create_table(
         _TABLE,
         sa.Column("run_id", sa.String(length=128), nullable=False),

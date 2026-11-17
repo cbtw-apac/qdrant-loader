@@ -2,6 +2,17 @@
 
 Revision ID: 0033
 Revises: 0032
+
+Phase: expand, data and contract in one revision
+Reversible: partly; the downgrade drops the columns and the constraint and keeps the renumbered
+            seq values
+Touches: conversation_sessions (four columns, every row updated); conversation_messages
+         (duplicate seq values renumbered, unique constraint added)
+Locks: ACCESS EXCLUSIVE lock on conversation_sessions from the first ADD COLUMN until the
+       migration run commits, so session reads and writes wait through the session and message
+       updates; conversation_messages is then locked exclusively while the unique constraint
+       builds. SQLite copies conversation_messages.
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -16,6 +27,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """Add title source, sequence and turn-lease columns and make message seq unique."""
     op.add_column("conversation_sessions", sa.Column("title_source", sa.String(16), nullable=True))
     op.add_column(
         "conversation_sessions",
@@ -73,6 +85,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the unique seq constraint and the title, sequence and turn-lease columns."""
     with op.batch_alter_table("conversation_messages") as batch:
         batch.drop_constraint("uq_conversation_messages_owner_seq", type_="unique")
     with op.batch_alter_table("conversation_sessions") as batch:

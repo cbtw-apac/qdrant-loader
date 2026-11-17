@@ -9,6 +9,13 @@ the server default of false is the correct backfill.
 
 Revision ID: 0030
 Revises: 0029
+
+Phase: expand
+Reversible: yes; the downgrade drops the partial flag
+Touches: conversation_messages; existing rows read as not partial
+Locks: ACCESS EXCLUSIVE lock on conversation_messages, taken by the ALTER and held until the
+       migration run commits
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ _COLUMN = "partial"
 
 
 def upgrade() -> None:
+    """Add the partial flag to conversation_messages, false by default."""
     op.add_column(
         _TABLE,
         sa.Column(_COLUMN, sa.Boolean(), server_default=sa.false(), nullable=False),
@@ -33,4 +41,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the partial flag from conversation_messages."""
     op.drop_column(_TABLE, _COLUMN)

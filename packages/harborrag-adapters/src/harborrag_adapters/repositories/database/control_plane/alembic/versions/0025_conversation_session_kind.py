@@ -9,6 +9,13 @@ unknown session. Existing rows default to "chat".
 
 Revision ID: 0025
 Revises: 0024
+
+Phase: expand
+Reversible: yes; the downgrade drops conversation_sessions.kind
+Touches: conversation_sessions; existing rows get kind chat
+Locks: ACCESS EXCLUSIVE lock on conversation_sessions, taken by the ALTER and held until the
+       migration run commits
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """Add conversation_sessions.kind, defaulting to chat."""
     op.add_column(
         "conversation_sessions",
         sa.Column("kind", sa.String(length=16), nullable=False, server_default="chat"),
@@ -30,4 +38,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop conversation_sessions.kind."""
     op.drop_column("conversation_sessions", "kind")

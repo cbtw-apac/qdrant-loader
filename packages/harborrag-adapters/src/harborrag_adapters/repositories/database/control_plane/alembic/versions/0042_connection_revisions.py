@@ -7,6 +7,13 @@ replaced stored secret can wait until no active run still needs it.
 
 Revision ID: 0042
 Revises: 0041
+
+Phase: expand
+Reversible: yes; the downgrade drops connection_revisions and its rows
+Touches: connection_revisions (new)
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on connection_revisions to
+       drop it
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ _TZDT = sa.DateTime(timezone=True)
 
 
 def upgrade() -> None:
+    """Create connection_revisions and its source index."""
     op.create_table(
         "connection_revisions",
         sa.Column("tenant_id", sa.String(128), nullable=False),
@@ -43,5 +51,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop connection_revisions and its source index."""
     op.drop_index("ix_connection_revisions_source", table_name="connection_revisions")
     op.drop_table("connection_revisions")

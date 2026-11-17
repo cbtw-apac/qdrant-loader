@@ -21,6 +21,16 @@ in-place edit is invisible to that aggregate.
 
 Revision ID: 0032
 Revises: 0031
+
+Phase: expand, data and contract in one revision
+Reversible: yes; the downgrade drops secrets.tenant_id and both updated_at columns
+Touches: secrets, providers, routing_rules; every row backfilled, with one UPDATE per uniquely
+         owned secret reference, reading sources
+Locks: ACCESS EXCLUSIVE lock on secrets, providers and routing_rules, each from its ADD COLUMN
+       until the migration run commits, covering the backfills (one UPDATE per uniquely owned
+       secret reference), the NOT NULL changes and the secrets index build. SQLite copies each
+       table.
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -45,7 +55,6 @@ _IX_SECRETS_TENANT = "ix_secrets_tenant_id"
 
 def _owning_tenants() -> dict[str, str]:
     """Map each legacy secret ref to the single tenant whose rows reference it."""
-
     bind = op.get_bind()
     owners: dict[str, set[str]] = {}
     for tenant_id, refs in bind.execute(sa.text("SELECT tenant_id, secret_refs FROM sources")):
@@ -75,6 +84,7 @@ def _backfill_routing_rules() -> None:
 
 
 def upgrade() -> None:
+    """Add secrets.tenant_id and the provider and routing-rule timestamps, backfilled."""
     # tenant_id carries a server_default so the column is populated for legacy
     # rows and for any insert that predates the repository change; it still
     # arrives nullable and is tightened through batch_alter_table because
@@ -103,6 +113,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop secrets.tenant_id and the provider and routing-rule timestamps."""
     with op.batch_alter_table(_ROUTING_RULES) as batch:
         batch.drop_column("updated_at")
     with op.batch_alter_table(_PROVIDERS) as batch:

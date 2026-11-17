@@ -2,6 +2,13 @@
 
 Revision ID: 0023
 Revises: 0022
+
+Phase: expand
+Reversible: yes; the downgrade drops the four tables and their rows
+Touches: summary_tenants, summary_scopes, summary_bindings, summary_cache (new)
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on the four tables to drop
+       them
+Deploy: before the application release
 """
 
 from alembic import op
@@ -14,6 +21,7 @@ depends_on = None
 
 
 def tables() -> MetaData:
+    """Describe the four summary tables this revision creates and drops."""
     metadata = MetaData()
     Table(
         "summary_tenants",
@@ -59,8 +67,10 @@ def tables() -> MetaData:
 
 
 def upgrade() -> None:
+    """Create the summary projection tables."""
     tables().create_all(op.get_bind())
 
 
 def downgrade() -> None:
+    """Drop the summary projection tables."""
     tables().drop_all(op.get_bind())

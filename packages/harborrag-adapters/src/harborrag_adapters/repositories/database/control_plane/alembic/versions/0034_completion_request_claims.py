@@ -2,6 +2,13 @@
 
 Revision ID: 0034
 Revises: 0033
+
+Phase: expand
+Reversible: yes; the downgrade drops completion_requests and its rows
+Touches: completion_requests (new)
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on completion_requests to
+       drop it
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -16,6 +23,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """Create completion_requests and its owner and session index."""
     op.create_table(
         "completion_requests",
         sa.Column("tenant_id", sa.String(128), primary_key=True),
@@ -36,4 +44,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop completion_requests."""
     op.drop_table("completion_requests")

@@ -7,6 +7,15 @@ renamed to ``ck_mcp_key_*``; ``ck_mcp_api_keys_tenant`` is untouched.
 
 Revision ID: 0040
 Revises: 0039
+
+Phase: contract; tightens the key format checks and widens the environment check
+Reversible: yes; the downgrade fails while a staging key exists
+Touches: mcp_api_keys; four check constraints replaced. The upgrade fails while a stored key_id
+         or secret_hash is not lowercase hex, so correct or delete such rows first; revoking a
+         key keeps its row
+Locks: ACCESS EXCLUSIVE lock on mcp_api_keys from the constraint swap until the migration run
+       commits; the new check validates every row under it. SQLite copies mcp_api_keys.
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -45,6 +54,7 @@ def _new_constraints() -> dict[str, str]:
 
 
 def upgrade() -> None:
+    """Replace the mcp_api_keys checks with the lowercase-hex and staging-aware ones."""
     # SQLite cannot alter constraints in place; batch mode rebuilds the table
     # (and its index) there, and issues plain ALTER TABLE on PostgreSQL.
     with op.batch_alter_table(_TABLE) as batch:
@@ -55,6 +65,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Restore the checks migration 0036 created."""
     # Fails if staging keys exist, which is correct: the 0036 schema cannot
     # hold them.
     with op.batch_alter_table(_TABLE) as batch:

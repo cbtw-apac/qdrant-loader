@@ -24,8 +24,7 @@ def _production(tmp_path: Path) -> CompositionRoot:
 
 @pytest.mark.whitebox
 def test_production_composition_migrates_and_reports_ready(tmp_path: Path, caplog) -> None:
-    """production() runs migrations, probes the DB, and reports ready
-    diagnostics with the stamped migration version."""
+    """production() migrates, probes the DB and reports the stamped revision as ready."""
     with caplog.at_level(logging.INFO, logger="harborrag.runtime.composition"):
         composition = _production(tmp_path)
     assert composition.mode == "production"
@@ -36,10 +35,10 @@ def test_production_composition_migrates_and_reports_ready(tmp_path: Path, caplo
     assert runtime["ready"] is True
     control_db = runtime["control_db"]
     assert control_db["ping"] == "ok"
-    assert control_db["migrations"] == "0047"
+    assert control_db["migrations"] == "0048"
     assert control_db["scheme"] == "sqlite+aiosqlite"
     assert "Control-plane composition completed" in caplog.text
-    assert "database_scheme=sqlite+aiosqlite ready=True migration=0047" in caplog.text
+    assert "database_scheme=sqlite+aiosqlite ready=True migration=0048" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -83,7 +82,6 @@ async def test_production_repositories_hit_the_real_database(
 @pytest.mark.whitebox
 def test_production_migration_failure_aborts_startup(tmp_path: Path) -> None:
     """An unreachable control DB must not leave a degraded process serving traffic."""
-
     settings = RuntimeSettings(control_db_url=f"sqlite+aiosqlite:///{tmp_path}/nodir/x.db")
     with pytest.raises(HarborConfigurationError, match="migrations failed"):
         CompositionRoot.production(settings)
@@ -94,6 +92,7 @@ def test_production_probe_failure_aborts_startup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A control DB that migrates but fails its probe must not start the process."""
     monkeypatch.setattr(
         "harborrag_runtime.composition.control_plane._probe_control_db",
         lambda _dsn: {"ping": "failed", "error": "probe failed", "scheme": "sqlite"},
@@ -106,10 +105,12 @@ def test_production_probe_failure_aborts_startup(
 @pytest.mark.whitebox
 @pytest.mark.parametrize("env", ["staging", "prod"])
 def test_prod_env_refuses_default_control_db_url(env: Literal["staging", "prod"]) -> None:
-    """Fail closed: env=prod with the default sqlite control_db_url must not
-    boot, mirroring the auth_mode=none-in-prod guard. control_db_url is
-    passed explicitly so the test exercises the intended default regardless
-    of an ambient HARBORRAG_CONTROL_DB_URL in the environment."""
+    """env=prod with the default SQLite control_db_url must not boot.
+
+    This mirrors the auth_mode=none-in-prod guard. control_db_url is passed
+    explicitly so the test exercises the intended default regardless of an
+    ambient HARBORRAG_CONTROL_DB_URL in the environment.
+    """
     with pytest.raises(ValueError, match="SQLite is development-only"):
         RuntimeSettings(env=env, control_db_url=DEFAULT_CONTROL_DB_URL)
 
@@ -131,11 +132,12 @@ async def test_prod_env_rejects_every_explicit_sqlite_url(
 async def test_blank_encryption_key_falls_back_to_the_dev_default(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A whitespace-only key is legal at the settings layer for a SQLite
-    control DB (RuntimeSettings only requires a key for non-SQLite/prod), but
-    composition must not derive a Fernet key from that blank value -- it
-    should fail closed to the known dev-default key instead, exactly as if
-    the key had been left unset."""
+    """A whitespace-only key on a SQLite control DB falls back to the dev-default key.
+
+    RuntimeSettings only requires a key for non-SQLite or prod, so the blank
+    value is legal at the settings layer. Composition must not derive a Fernet
+    key from it and behaves exactly as if the key had been left unset.
+    """
     dsn = f"sqlite+aiosqlite:///{tmp_path}/control.db"
     settings = RuntimeSettings(control_db_url=dsn, secrets_encryption_key="   ")
 
@@ -152,9 +154,11 @@ async def test_blank_encryption_key_falls_back_to_the_dev_default(
 async def test_dev_env_allows_default_control_db_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """env=dev keeps booting against the default sqlite control_db_url.
+    """env=dev keeps booting against the default SQLite control_db_url.
+
     control_db_url is passed explicitly so the test deterministically
-    exercises the intended default regardless of the environment."""
+    exercises the intended default regardless of the environment.
+    """
     monkeypatch.chdir(tmp_path)
     composition = CompositionRoot.production(
         RuntimeSettings(env="dev", control_db_url=DEFAULT_CONTROL_DB_URL)
@@ -178,9 +182,7 @@ def test_migration_failure_logs_safe_actionable_diagnostics(
     way to tell that apart from a connection failure, and the real symptom surfaces much
     later as a missing column in an unrelated query.
     """
-
     dsn = f"sqlite+aiosqlite:///{tmp_path}/control.db"
-    # Build the schema without stamping it, exactly as an un-migrated database looks.
     import sqlite3
 
     connection = sqlite3.connect(f"{tmp_path}/control.db")
@@ -210,7 +212,6 @@ def test_database_ahead_of_this_build_names_both_revisions_and_the_remedy(
     only "migrations failed; inspect the startup logs"; the unknown revision was buried in
     an Alembic traceback and the API crash-looped without naming the cause.
     """
-
     import sqlite3
 
     from harborrag_adapters.repositories.database.control_plane.migrations import (
@@ -242,9 +243,11 @@ def test_database_ahead_of_this_build_names_both_revisions_and_the_remedy(
 def test_non_sqlite_control_db_refuses_a_blank_encryption_key_before_connecting(
     env: str, key: str | None
 ) -> None:
-    """The dev-default Fernet key must never protect secrets in a persistent
-    database, in any environment. The check runs before migrations, so this
-    unresolvable DSN is never dialled."""
+    """The dev-default Fernet key never protects secrets in a persistent database.
+
+    This holds in every environment. The check runs before migrations, so this
+    unresolvable DSN is never dialled.
+    """
     settings = RuntimeSettings(
         env=env,
         control_db_url="postgresql+asyncpg://user:pass@database.invalid/control",
@@ -260,6 +263,7 @@ def test_non_sqlite_control_db_refuses_a_blank_encryption_key_before_connecting(
 
 @pytest.mark.whitebox
 def test_the_key_file_supplies_the_encryption_key(tmp_path: Path) -> None:
+    """A key file supplies the encryption key unless the environment sets one."""
     key_file = tmp_path / "encryption.key"
     key_file.write_text("from-a-mounted-secret\n", encoding="utf-8")
     dsn = "postgresql+asyncpg://user:pass@database.invalid/control"

@@ -3,10 +3,22 @@
 Revision ID: 0045
 Revises: 0044
 
+Phase: contract, with deletes
+Reversible: no, because the deleted rows are gone. The downgrade restores kind and surface as
+            chat on every row, so agent sessions and usage rows lose their original values, and
+            restores the other columns empty
+Touches: conversation_messages, completion_requests, memories, conversation_sessions,
+         model_usage
+Locks: the deletes take row locks, then each of the four altered tables is locked ACCESS
+       EXCLUSIVE from its ALTER until the migration run commits, covering the memories index
+       rebuild. SQLite copies each table.
+Deploy: after the application release
+
 The upgrade deletes tool messages, the replay claims of agent sessions,
 run-scoped memories and working memories, then drops their columns. Agent
-sessions themselves stay and list as chat. The downgrade restores the columns
-empty; the deleted rows cannot be recovered.
+sessions themselves stay and list as chat. The downgrade restores the columns,
+with ``kind`` and ``surface`` set to ``chat`` and the rest empty; the deleted
+rows cannot be recovered.
 """
 
 from __future__ import annotations
@@ -25,6 +37,7 @@ _OWNER_WITH_RUN = [*_OWNER, "run_id"]
 
 
 def upgrade() -> None:
+    """Delete what only agent runs wrote, then drop its columns."""
     op.execute("DELETE FROM conversation_messages WHERE role = 'tool'")
     op.execute(
         "DELETE FROM completion_requests WHERE session_id IN "
@@ -47,6 +60,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Restore the dropped columns: kind and surface as chat, the rest empty."""
     with op.batch_alter_table("model_usage") as batch:
         batch.add_column(sa.Column("run_id", sa.String(length=128), nullable=True))
         batch.add_column(

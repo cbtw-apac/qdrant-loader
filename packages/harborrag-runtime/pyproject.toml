@@ -14,7 +14,7 @@ dependencies = [
     "PyYAML>=6.0.0",
     "pydantic>=2.13,<3",
     "pydantic-settings>=2.2",
-    "opentelemetry-api>=1.45.1,<2",
+    "opentelemetry-api>=1.45.2,<2",
     "prometheus-client>=0.19,<1",
 ]
 

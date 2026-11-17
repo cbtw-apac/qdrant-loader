@@ -6,6 +6,13 @@ patch a single node/relation in place.
 
 Revision ID: 0020
 Revises: 0019
+
+Phase: expand
+Reversible: yes; the downgrade drops graph_conflicts and its rows
+Touches: graph_conflicts (new)
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on graph_conflicts to drop
+       it
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ _INDEX_NAME = "ix_graph_conflicts_tenant_detected"
 
 
 def upgrade() -> None:
+    """Create graph_conflicts and its index."""
     op.create_table(
         "graph_conflicts",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -44,5 +52,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop graph_conflicts and its index."""
     op.drop_index(_INDEX_NAME, table_name="graph_conflicts")
     op.drop_table("graph_conflicts")

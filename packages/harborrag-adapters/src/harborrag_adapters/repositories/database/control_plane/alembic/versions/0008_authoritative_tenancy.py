@@ -3,6 +3,17 @@
 Revision ID: 0008
 Revises: 0007
 
+Phase: expand, data and contract in one revision
+Reversible: partly; the downgrade restores the old uniqueness rules and keeps tenant_id. It
+            fails while two tenants share a non-null idempotency key or a document identity, so
+            resolve those collisions first
+Touches: source_scopes, documents, ingestion_tasks; tenant_id backfilled on every row
+Locks: the backfill updates every row of the three tables on any database, so conflicting
+       updates and deletes wait on those row locks until the migration run commits. A legacy
+       database also takes an ACCESS EXCLUSIVE lock on each table from its first ALTER, covering
+       the NOT NULL change and the index and constraint rebuilds. SQLite copies each table.
+Deploy: before the application release
+
 This migration is intentionally schema-aware. New databases receive these
 columns from the consolidated 0001 baseline, while legacy databases stamped
 at 0007 still need the forward migration.
@@ -141,7 +152,6 @@ def _ensure_idempotency_identity() -> None:
 
 def upgrade() -> None:
     """Add and backfill authoritative tenant ownership on legacy schemas."""
-
     _add_missing_tenant_columns()
     _backfill_tenants()
     _make_tenant_columns_required()
@@ -170,7 +180,6 @@ def downgrade() -> None:
     legacy database that this revision's ``upgrade()`` actually populated
     keeps its tenant data intact across a rollback.
     """
-
     idempotency_name = "uq_ingestion_task_idempotency_key"
     _drop_index_if_present("ingestion_tasks", idempotency_name)
     op.create_index(

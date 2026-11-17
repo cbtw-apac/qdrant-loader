@@ -8,6 +8,12 @@ aggregations the port exposes.
 
 Revision ID: 0029
 Revises: 0028
+
+Phase: expand
+Reversible: yes; the downgrade drops model_usage and its rows
+Touches: model_usage (new)
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on model_usage to drop it
+Deploy: before the application release
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ _IX_CREATED = "ix_model_usage_created_at"
 
 
 def upgrade() -> None:
+    """Create model_usage and its indexes."""
     op.create_table(
         _TABLE,
         sa.Column("id", sa.String(length=128), nullable=False),
@@ -53,6 +60,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop model_usage and its indexes."""
     op.drop_index(_IX_CREATED, table_name=_TABLE)
     op.drop_index(_IX_USER, table_name=_TABLE)
     op.drop_index(_IX_TENANT, table_name=_TABLE)
