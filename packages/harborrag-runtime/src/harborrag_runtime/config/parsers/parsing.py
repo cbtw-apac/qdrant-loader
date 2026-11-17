@@ -15,6 +15,7 @@ from harborrag_runtime.config.loading import (
 from harborrag_runtime.config.parsers.providers import (
     PDF_BACKEND_PYTHON_ONLY_FIELDS,
     PDF_BACKEND_SECRET_FIELDS,
+    PdfBackendSpec,
     parser_factory,
     parser_setting_names,
     pdf_backend_spec,
@@ -222,9 +223,25 @@ def _parse_pdf_backend(
         raise ParserConfigurationError(
             f"{label} environment is supported only for the MinerU subprocess backend"
         )
+    _check_setting_values(label, backend, spec, settings)
     return PdfBackendDefinition(
         backend=backend,
         settings=settings,
         secret_environment=secret_environment,
         process_environment=process_environment,
     )
+
+
+def _check_setting_values(
+    label: str,
+    backend: str,
+    spec: PdfBackendSpec,
+    settings: Mapping[str, Any],
+) -> None:
+    """Reject setting values the backend refuses, when the catalog loads."""
+    try:
+        spec.check_settings(settings)
+    except (TypeError, ValueError) as error:
+        raise ParserConfigurationError(
+            f"{label} ({backend}) has an invalid setting: {error}"
+        ) from error

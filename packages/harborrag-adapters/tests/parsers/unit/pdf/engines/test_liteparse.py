@@ -144,3 +144,19 @@ def test_liteparse_strip_code_fences_is_not_a_constructor_argument() -> None:
     backend = LiteParseBackend(options=LiteParseBackendOptions(strip_code_fences=True))
 
     assert "strip_code_fences" not in backend._constructor_kwargs()
+
+
+@pytest.mark.parametrize("num_workers", [0, -2, 1.5, True, "three"])
+def test_liteparse_options_invalid_num_workers_is_rejected(num_workers: object) -> None:
+    with pytest.raises(ValueError, match="num_workers must be an integer of at least 1"):
+        LiteParseBackendOptions(num_workers=num_workers)  # type: ignore[arg-type]  # invalid on purpose
+
+
+def test_liteparse_backend_invalid_num_workers_override_is_rejected() -> None:
+    with pytest.raises(ValueError, match="got 0"):
+        LiteParseBackend(num_workers=0)
+
+
+@pytest.mark.parametrize("num_workers", [None, 1, 3])
+def test_liteparse_options_valid_num_workers_is_kept(num_workers: int | None) -> None:
+    assert LiteParseBackendOptions(num_workers=num_workers).num_workers == num_workers

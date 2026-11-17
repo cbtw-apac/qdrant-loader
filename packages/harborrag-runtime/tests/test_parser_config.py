@@ -350,6 +350,59 @@ def test_rejects_invalid_parser_configuration(
         load_parser_catalog(_write_config(tmp_path, content))
 
 
+def _liteparse_num_workers_config(tmp_path: Path, value: str) -> Path:
+    return _write_config(
+        tmp_path,
+        f"""
+        version: 1
+        parsers:
+          custom-pdf:
+            parser: pdf
+            engines:
+              - backend: liteparse
+                settings:
+                  num_workers: {value}
+        """,
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "reported"),
+    [
+        ("0", "got 0"),
+        ("-2", "got -2"),
+        ("1.5", "got 1.5"),
+        ("true", "got True"),
+        ("three", "got 'three'"),
+    ],
+)
+def test_load_parser_catalog_invalid_liteparse_num_workers_is_rejected(
+    tmp_path: Path,
+    value: str,
+    reported: str,
+) -> None:
+    config_path = _liteparse_num_workers_config(tmp_path, value)
+
+    with pytest.raises(ParserConfigurationError) as error:
+        load_parser_catalog(config_path)
+
+    message = str(error.value)
+    assert "parser 'custom-pdf' engine 0 (liteparse)" in message
+    assert "num_workers must be an integer of at least 1" in message
+    assert reported in message
+
+
+@pytest.mark.parametrize(("value", "expected"), [("1", 1), ("null", None)])
+def test_load_parser_catalog_valid_liteparse_num_workers_is_kept(
+    tmp_path: Path,
+    value: str,
+    expected: int | None,
+) -> None:
+    catalog = load_parser_catalog(_liteparse_num_workers_config(tmp_path, value))
+
+    assert catalog.build("custom-pdf").backends[0].options.num_workers == expected
+
+
 def test_parser_definition_repr_hides_settings() -> None:
     definition = ParserDefinition(
         name="secretive",

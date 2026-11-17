@@ -1,3 +1,8 @@
+"""Parser and PDF backend constructors that a YAML parser catalog can name.
+
+A backend's option class owns the checks on its setting values.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -181,6 +186,19 @@ class PdfBackendSpec:
         if self.option_factory is None:
             return set()
         return {item.name for item in fields(self.option_factory)}  # type: ignore[arg-type]
+
+    def check_settings(self, settings: Mapping[str, Any]) -> None:
+        """Run the backend's own value checks on YAML settings without building it.
+
+        Args:
+            settings: Backend option names and their YAML values.
+
+        Raises:
+            TypeError: A setting has a type the backend's options cannot check.
+            ValueError: The backend's options reject a setting's value.
+        """
+        if self.option_factory is not None:
+            self.option_factory(**settings)
 
     def build(self, settings: Mapping[str, Any]) -> HarborPDFEngine:
         """Construct a backend and its typed options from YAML settings."""
