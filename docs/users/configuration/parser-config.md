@@ -14,6 +14,30 @@ of every document's processing identity, so editing it reprocesses each connecti
 documents on its next sync; see
 [What reprocesses on the next sync](runtime-settings.md#what-reprocesses-on-the-next-sync).
 
+## When the file is checked
+
+The API and the ingestion worker load the file when they start and stop with a
+configuration error if it is invalid. `harborrag doctor` runs the same check without
+starting either. Loading rejects:
+
+- a field, parser type, backend or setting the file format does not have
+- a setting the selected parser or backend does not support
+- a value outside what a `pdf` or `image` parser setting, or a LiteParse or MinerU
+  engine setting, accepts
+- two enabled definitions for the same parser family
+
+Docling and PaddleOCR settings are checked by name, not by value.
+
+The error names the definition, the engine's position in its chain, the setting, what
+it accepts and the value given:
+
+```text
+parser 'pdf-liteparse' engine 0 (liteparse) has an invalid setting: LiteParse num_workers must be an integer of at least 1 or null, got 0
+```
+
+If the file is missing, the worker does not start. The API starts and logs a warning,
+and it cannot start an ingestion until the file exists.
+
 ## Formats HarborRAG reads
 
 `HarborParser` routes each file by its suffix and media type. Its default stack
@@ -97,6 +121,18 @@ page is ordinary prose, sometimes tagged with a guessed language such as
 ```` ```python ````. Only the delimiter lines are dropped, so no extracted text is
 lost; set it to `false` to keep LiteParse's fences.
 
+LiteParse replaces an `output_format` or `image_mode` it does not know with its own
+default, so HarborRAG checks both before LiteParse sees them. `output_format` is
+`markdown`, `text` or `json`. `image_mode` is `placeholder`, `embed` or `off`, and
+`none` is read as `off`. `dpi` and `num_workers` are at least 1. `extra_options`
+passes further LiteParse arguments through unchecked, so LiteParse itself rejects one
+it does not know when it parses its first PDF, and `extra_options` cannot repeat a
+setting that has its own key.
+
+YAML reads an unquoted `yes`, `no`, `on` or `off` as a boolean. An unquoted
+`image_mode: off` still means `off`, but quote any other such value, for example the
+language code `'no'`.
+
 ### OCR server
 
 `ocr_server_url` points at a self-hosted OCR service that LiteParse calls for scanned
@@ -148,7 +184,8 @@ parsers:
 
 Supported backend names are `pymupdf`, `docling`, `liteparse`, `mineru` and
 `paddleocr`. An explicit `engines` chain cannot also set `profile`. Backend settings
-are strict and checked against typed option dataclasses.
+are strict: a setting the selected backend does not have fails the load, so switching
+`backend` means replacing its `settings` too.
 
 A definition can name a built-in `profile` instead: `liteparse` (the default when a
 PDF definition names neither `engines` nor `profile`: LiteParse, then PyMuPDF),
@@ -185,6 +222,10 @@ parsers:
 apply to `pytesseract` only, and only `liteparse` uses `ocr_server_url`. Pillow
 decodes every image first, so `max_pixels` and decompression-bomb limits apply before
 anything is uploaded.
+
+`timeout` is in seconds, and `0` or `null` sets no limit. A setting that only another
+engine uses is accepted and ignored. An unknown `ocr_engine`, a negative `timeout` or
+a `max_pixels` below 1 fails the load.
 
 ## Document limits
 
@@ -226,7 +267,9 @@ Compose passes it to the ingestion worker.
 Any setting value may also reference the environment directly with `${VARIABLE}` or
 `${VARIABLE:-default}`, which is how the OCR server URL above moves between a
 containerized worker and a host run. A bare `${VARIABLE}` that is unset fails the
-load; give it a default to make it optional. Credentials do not belong here: settings
+load; give it a default to make it optional. The API loads the file too and does not
+receive `env/.env.parser` under Compose, so a bare reference must also be set for the
+API, for example in `env/.env.api`. Credentials do not belong here: settings
 named after a secret field are rejected whatever their value, so they keep using the
 `secrets` block.
 
@@ -245,8 +288,8 @@ parser_registry = catalog.build_harbor_parser()
 
 Each parser family takes at most one enabled definition: `docx` and `epub` share the
 document family, `csv` and `excel` the spreadsheet family, and `html` and `markdown`
-the markup family. `build_harbor_parser()` rejects conflicting enabled definitions
-instead of choosing silently.
+the markup family. `load_parser_catalog()` rejects two enabled definitions for one
+family instead of choosing silently.
 
 Code overrides take precedence over YAML settings:
 
@@ -254,5 +297,7 @@ Code overrides take precedence over YAML settings:
 pdf = catalog.build("pdf-liteparse", overrides={"min_content_chars": 100})
 ```
 
-Building validates the configuration. A backend whose optional library, executable,
-model, device or service is unavailable reports that failure when it parses.
+Loading validates the configuration. Building resolves the `secrets` and
+`environment` references, so a referenced variable that is unset fails there. A
+backend whose optional library, executable, model, device or service is unavailable
+reports that failure when it parses.

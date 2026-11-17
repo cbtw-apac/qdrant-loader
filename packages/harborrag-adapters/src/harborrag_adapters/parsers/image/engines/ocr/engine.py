@@ -1,11 +1,26 @@
+"""Image OCR engine that reads raster images with a selectable OCR library.
+
+OCR libraries are optional, so each is imported only when an image is parsed.
+"""
+
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Any, ClassVar
 
 from harborrag_adapters.parsers.common.limits import IMAGE_MAX_PIXELS
 from harborrag_adapters.parsers.common.normalization import strip_code_fences
+from harborrag_adapters.parsers.common.option_rules import (
+    TEXT,
+    OptionRule,
+    concealed,
+    integer_from,
+    number_from,
+    or_null,
+    require_permitted_options,
+)
 from harborrag_adapters.parsers.common.resources import read_parse_input_bytes
 from harborrag_adapters.parsers.common.utils import (
     get_parser_logger,
@@ -26,10 +41,34 @@ parser_logger = get_parser_logger("image")
 
 DEFAULT_MAX_IMAGE_PIXELS = IMAGE_MAX_PIXELS
 
+_OPTION_RULES: Mapping[str, OptionRule] = {
+    "lang": or_null(TEXT),
+    "config": or_null(TEXT),
+    "timeout": or_null(number_from(0)),
+    "max_pixels": or_null(integer_from(1)),
+    "ocr_server_url": concealed(or_null(TEXT)),
+}
+
 
 @dataclass(slots=True)
 class OcrImageEngine(HarborImageEngine):
-    """Run OCR over raster images using a selectable local OCR engine."""
+    """Run OCR over raster images using a selectable OCR engine.
+
+    Attributes:
+        parser_name: Parser family this engine belongs to.
+        parser_engine: Label naming the OCR libraries this engine can use.
+        suffixes: File suffixes the engine reads.
+        content_types: Media types the engine reads.
+        ocr_engine: ``liteparse``, ``rapidocr`` or ``pytesseract``, in any case.
+        lang: OCR language for ``liteparse`` and ``pytesseract``.
+        config: Extra Tesseract arguments, for ``pytesseract`` only.
+        timeout: Seconds ``pytesseract`` may run, 0 or more. None or 0 sets no
+            limit.
+        max_pixels: Most pixels an image may have, at least 1. None turns the
+            check off.
+        ocr_server_url: OCR server for ``liteparse``, which otherwise OCRs
+            locally. Blank means None.
+    """
 
     parser_name: ClassVar[str] = "image"
     parser_engine: ClassVar[str] = "rapidocr/pytesseract/liteparse"
@@ -50,18 +89,22 @@ class OcrImageEngine(HarborImageEngine):
 
     ocr_engine: str = "liteparse"
     lang: str | None = None
-    config: str = ""
+    config: str | None = ""
     timeout: int | float | None = 60
     max_pixels: int | None = DEFAULT_MAX_IMAGE_PIXELS
-    # Only meaningful for the `liteparse` engine, which OCRs through an
-    # external server instead of a local inference runtime.
     ocr_server_url: str | None = None
     _rapidocr_engine: Any | None = field(default=None, init=False, repr=False)
     _liteparse_parser: Any | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Normalize and validate the configured OCR engine."""
+        """Normalize the OCR engine name and server URL and reject invalid options.
 
+        A blank server URL means no OCR server, so LiteParse OCRs locally.
+
+        Raises:
+            ValueError: The OCR engine is unsupported, or an option's value is
+                outside its permitted type or range.
+        """
         if not isinstance(self.ocr_engine, str):
             raise ValueError("Image OCR engine must be a string")
         self.ocr_engine = self.ocr_engine.lower().strip()
@@ -70,24 +113,21 @@ class OcrImageEngine(HarborImageEngine):
                 f"Unsupported image OCR engine {self.ocr_engine!r}: "
                 "pytesseract, rapidocr, liteparse"
             )
-        if self.max_pixels is not None and (
-            not isinstance(self.max_pixels, int)
-            or isinstance(self.max_pixels, bool)
-            or self.max_pixels <= 0
-        ):
-            raise ValueError("Image max_pixels must be a positive integer or null")
-        # A blank URL (HARBORRAG_OCR_SERVER_URL left empty) means no OCR server:
-        # LiteParse then OCRs locally with Tesseract.
         if isinstance(self.ocr_server_url, str):
             self.ocr_server_url = self.ocr_server_url.strip() or None
+        require_permitted_options(
+            "Image",
+            {name: getattr(self, name) for name in _OPTION_RULES},
+            _OPTION_RULES,
+        )
 
     @property
     def name(self) -> str:
+        """The selected OCR engine's name."""
         return self.ocr_engine
 
     def parse(self, input: ParseInput) -> ParsedDocument:
         """Decode the image with Pillow, OCR it, and return extracted text."""
-
         parse_input = self.coerce_input(input)
         try:
             from PIL import Image
@@ -254,7 +294,6 @@ class OcrImageEngine(HarborImageEngine):
 
     def _extract_text(self, data: bytes, image: Any) -> str:
         """Dispatch OCR while keeping optional dependencies lazy."""
-
         if self.ocr_engine == "liteparse":
             return self._extract_with_liteparse(data)
         if self.ocr_engine == "rapidocr":
@@ -263,9 +302,11 @@ class OcrImageEngine(HarborImageEngine):
         return self._extract_with_pytesseract(image)
 
     def _prepare_rapidocr_bytes(self, data: bytes, image: Any) -> bytes:
-        """RapidOCR is sensitive to CMYK and similar non-RGB modes; convert to
-        RGB before handing the payload to the ONNX detector so scans and print
-        images do not fail with a misleading empty detection result."""
+        """Convert image modes RapidOCR misreads to RGB before detection.
+
+        RapidOCR is sensitive to CMYK and similar non-RGB modes, where scans
+        and print images otherwise give a misleading empty detection result.
+        """
         mode = getattr(image, "mode", "")
         if mode.upper() in {"CMYK", "YCBCR", "YCbCr", "RGBA", "LA", "P"}:
             rgb_image = image.convert("RGB")
@@ -276,7 +317,6 @@ class OcrImageEngine(HarborImageEngine):
 
     def _extract_with_pytesseract(self, image: Any) -> str:
         """Extract text with the legacy Tesseract adapter."""
-
         try:
             import pytesseract
         except ImportError as exc:
@@ -289,7 +329,7 @@ class OcrImageEngine(HarborImageEngine):
             content = pytesseract.image_to_string(
                 image,
                 lang=self.lang,
-                config=self.config,
+                config=self.config or "",
                 timeout=self.timeout,
             )
         except pytesseract.TesseractError as exc:
@@ -312,7 +352,6 @@ class OcrImageEngine(HarborImageEngine):
         ``dpi`` is passed: that setting rasterizes PDF pages and an image is
         already at its native resolution.
         """
-
         if self._liteparse_parser is None:
             try:
                 from liteparse import LiteParse
@@ -335,7 +374,6 @@ class OcrImageEngine(HarborImageEngine):
 
     def _extract_with_rapidocr(self, data: bytes) -> str:
         """Extract ordered text lines with a memoized RapidOCR engine."""
-
         if self._rapidocr_engine is None:
             try:
                 from rapidocr import RapidOCR

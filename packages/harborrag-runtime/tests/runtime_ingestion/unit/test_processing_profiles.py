@@ -11,6 +11,7 @@ from harborrag_core.ingestion import ChangeFingerprintBuilder
 from harborrag_engine.ingestion.chunking import ChunkingConfig
 from harborrag_engine.ingestion.chunking.sources import CanonicalDocumentChunkingStrategy
 from harborrag_engine.ingestion.chunking.table.rendering import TableRenderer
+from harborrag_runtime.config import ParserConfigurationError
 from harborrag_runtime.config.settings import RuntimeSettings
 from harborrag_runtime.ingestion.chunking_profile import (
     chunk_strategy_fingerprint,
@@ -18,6 +19,8 @@ from harborrag_runtime.ingestion.chunking_profile import (
 )
 from harborrag_runtime.ingestion.profiles import build_processing_profile
 from harborrag_runtime.tokenization import ApproximateTokenCounter
+
+pytestmark = pytest.mark.unit
 
 
 def test_profile_mapping_order_does_not_change_processing_identity() -> None:
@@ -100,3 +103,14 @@ def test_processing_profile_uses_custom_config_and_changes_admission_fingerprint
     assert builder.processing_fingerprint(profile=default) != builder.processing_fingerprint(
         profile=custom
     )
+
+
+def test_build_processing_profile_missing_parser_catalog_is_a_configuration_error(
+    tmp_path: Path,
+) -> None:
+    missing_catalog = tmp_path / "parsers.yaml"
+
+    with pytest.raises(ParserConfigurationError) as error:
+        build_processing_profile(RuntimeSettings(parser_config_path=missing_catalog))
+
+    assert str(missing_catalog) in str(error.value)

@@ -284,6 +284,28 @@ token is kept.
   the CLI and `connectors.yaml` still accept them.
 - **Removed:** `GET /v1/connections` and `/api/v1/sources*` answer `404`.
 
+#### Parser configuration
+
+- **The API checks `config/ingestion/parsers.yaml` when it starts.** An invalid
+  file stops the API with a configuration error, as it stops the worker. A
+  `${VARIABLE}` reference without a default must now be set for the API as
+  well, which does not receive `env/.env.parser` under Compose: set it in
+  `env/.env.api`, or write `${VARIABLE:-}`. Without the file the API still
+  starts and logs a warning.
+- **Setting values are checked when the file loads.** A value outside what a
+  setting accepts fails the load. Before, such a value failed only in the
+  worker, was replaced by a default, or was passed on as written, as a limit
+  written as a decimal or a boolean was. This covers the PDF `profile`,
+  `min_content_chars` and `max_pages`, the image `ocr_engine`, `max_pixels`,
+  `timeout`, `lang`, `config` and `ocr_server_url`, and the LiteParse
+  settings. Two enabled definitions for one parser family fail the load as
+  well. `harborrag doctor` reports the first error in its `parsers catalog`
+  check; see
+  [When the file is checked](configuration/parser-config.md#when-the-file-is-checked).
+- **LiteParse `extra_options` cannot repeat a setting.** Move an argument
+  that has its own key, such as `num_workers`, from `extra_options` to
+  `settings`.
+
 #### CLI, dependencies and Temporal
 
 - **`harborrag init` is removed**, with its scaffold templates and no replacement;

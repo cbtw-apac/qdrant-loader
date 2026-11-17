@@ -21,8 +21,9 @@ from harborrag_runtime.config import (
     ParserConfigurationError,
     load_parser_catalog,
 )
-from harborrag_runtime.config.parsers.providers import supported_parser_names
+from harborrag_runtime.config.parsers.providers import parser_family, supported_parser_names
 from harborrag_runtime.config.parsers.schemas import (
+    ParserCatalog,
     ParserDefinition,
     PdfBackendDefinition,
 )
@@ -362,7 +363,7 @@ def test_rejects_invalid_parser_configuration(
         load_parser_catalog(_write_config(tmp_path, content))
 
 
-def _liteparse_num_workers_config(tmp_path: Path, value: str) -> Path:
+def _liteparse_config(tmp_path: Path, settings: str) -> Path:
     return _write_config(
         tmp_path,
         f"""
@@ -372,8 +373,24 @@ def _liteparse_num_workers_config(tmp_path: Path, value: str) -> Path:
             parser: pdf
             engines:
               - backend: liteparse
-                settings:
-                  num_workers: {value}
+                settings: {settings}
+        """,
+    )
+
+
+def _liteparse_num_workers_config(tmp_path: Path, value: str) -> Path:
+    return _liteparse_config(tmp_path, f"{{num_workers: {value}}}")
+
+
+def _parser_settings_config(tmp_path: Path, parser: str, settings: str) -> Path:
+    return _write_config(
+        tmp_path,
+        f"""
+        version: 1
+        parsers:
+          custom:
+            parser: {parser}
+            settings: {settings}
         """,
     )
 
@@ -463,6 +480,133 @@ def test_load_parser_catalog_settings_of_another_pdf_backend_are_rejected(
     assert supported not in message
 
 
+@pytest.mark.parametrize(
+    ("settings", "named_in_error"),
+    [
+        ("{output_format: nonsense}", ("output_format", "markdown", "got 'nonsense'")),
+        ("{image_mode: nonsense}", ("image_mode", "placeholder", "got 'nonsense'")),
+        ("{input_mode: stream}", ("input_mode", "bytes", "got 'stream'")),
+        ("{dpi: -3}", ("dpi", "at least 1", "got -3")),
+        ("{max_pages: 0}", ("max_pages", "at least 1", "got 0")),
+        ("{ocr_enabled: maybe}", ("ocr_enabled", "true or false", "got 'maybe'")),
+        ("{extra_options: {num_workers: 0}}", ("extra_options", "num_workers")),
+    ],
+)
+def test_load_parser_catalog_invalid_liteparse_setting_value_is_rejected(
+    tmp_path: Path,
+    settings: str,
+    named_in_error: tuple[str, ...],
+) -> None:
+    config_path = _liteparse_config(tmp_path, settings)
+
+    with pytest.raises(ParserConfigurationError) as error:
+        load_parser_catalog(config_path)
+
+    message = str(error.value)
+    assert "parser 'custom-pdf' engine 0 (liteparse)" in message
+    assert [name for name in named_in_error if name not in message] == []
+
+
+@pytest.mark.parametrize(
+    ("settings", "option", "kept"),
+    [
+        ("{image_mode: off}", "image_mode", "off"),
+        ("{image_mode: none}", "image_mode", "none"),
+        ("{output_format: Markdown}", "output_format", "markdown"),
+        ("{ocr_language: null}", "ocr_language", None),
+        ("{tessdata_path: ''}", "tessdata_path", None),
+    ],
+)
+def test_load_parser_catalog_liteparse_setting_is_read_as_written_in_yaml(
+    tmp_path: Path,
+    settings: str,
+    option: str,
+    kept: str | None,
+) -> None:
+    catalog = load_parser_catalog(_liteparse_config(tmp_path, settings))
+
+    assert getattr(catalog.build("custom-pdf").backends[0].options, option) == kept
+
+
+@pytest.mark.parametrize(
+    ("parser", "settings", "named_in_error"),
+    [
+        ("pdf", "{profile: nonsense}", ("profile", "'nonsense'", "fast")),
+        ("pdf", "{profile: null}", ("profile", "None", "fast")),
+        ("pdf", "{min_content_chars: -1}", ("min_content_chars", "at least 0", "got -1")),
+        ("pdf", "{min_content_chars: abc}", ("min_content_chars", "an integer", "got 'abc'")),
+        ("pdf", "{max_pages: 0}", ("max_pages", "at least 1", "got 0")),
+        ("pdf", "{max_pages: abc}", ("max_pages", "an integer", "got 'abc'")),
+        ("image", "{ocr_engine: nonsense}", ("OCR engine", "'nonsense'", "liteparse")),
+        ("image", '{ocr_engine: ""}', ("OCR engine", "liteparse")),
+        ("image", "{max_pixels: 0}", ("max_pixels", "at least 1", "got 0")),
+        ("image", "{timeout: abc}", ("timeout", "a number", "got 'abc'")),
+        ("image", "{lang: 5}", ("lang", "text", "got 5")),
+    ],
+)
+def test_load_parser_catalog_invalid_parser_setting_value_is_rejected(
+    tmp_path: Path,
+    parser: str,
+    settings: str,
+    named_in_error: tuple[str, ...],
+) -> None:
+    config_path = _parser_settings_config(tmp_path, parser, settings)
+
+    with pytest.raises(ParserConfigurationError) as error:
+        load_parser_catalog(config_path)
+
+    message = str(error.value)
+    assert f"Parser 'custom' has an invalid {parser} setting" in message
+    assert [name for name in named_in_error if name not in message] == []
+
+
+def test_load_parser_catalog_invalid_page_limit_beside_an_engine_chain_is_rejected(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """
+        version: 1
+        parsers:
+          custom:
+            parser: pdf
+            settings:
+              max_pages: -5
+            engines:
+              - backend: pymupdf
+        """,
+    )
+
+    with pytest.raises(ParserConfigurationError, match="max_pages must be .*got -5"):
+        load_parser_catalog(config_path)
+
+
+@pytest.mark.parametrize(
+    ("parser", "settings", "kept"),
+    [
+        (
+            "pdf",
+            "{profile: fast, min_content_chars: 0, max_pages: null}",
+            {"profile": "fast", "min_content_chars": 0, "max_pages": None},
+        ),
+        (
+            "image",
+            "{ocr_engine: PyTesseract, timeout: 0, lang: en, max_pixels: null}",
+            {"ocr_engine": "PyTesseract", "timeout": 0, "lang": "en", "max_pixels": None},
+        ),
+    ],
+)
+def test_load_parser_catalog_permitted_parser_setting_values_are_kept(
+    tmp_path: Path,
+    parser: str,
+    settings: str,
+    kept: dict[str, object],
+) -> None:
+    catalog = load_parser_catalog(_parser_settings_config(tmp_path, parser, settings))
+
+    assert dict(catalog.get("custom").settings) == kept
+
+
 def test_parser_definition_repr_hides_settings() -> None:
     definition = ParserDefinition(
         name="secretive",
@@ -488,7 +632,42 @@ def test_pdf_backend_definition_repr_hides_settings() -> None:
     assert "mineru" in representation
 
 
-def test_registry_rejects_multiple_enabled_profiles_for_same_parser(
+@pytest.mark.parametrize(
+    ("first", "second", "family"),
+    [
+        ("pdf", "pdf", "pdf"),
+        ("docx", "epub", "document"),
+        ("csv", "excel", "spreadsheet"),
+        ("html", "markdown", "markup"),
+    ],
+)
+def test_load_parser_catalog_two_enabled_definitions_of_one_family_are_rejected(
+    tmp_path: Path,
+    first: str,
+    second: str,
+    family: str,
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        f"""
+        version: 1
+        parsers:
+          first-definition:
+            parser: {first}
+          second-definition:
+            parser: {second}
+        """,
+    )
+
+    with pytest.raises(ParserConfigurationError) as error:
+        load_parser_catalog(config_path)
+
+    message = str(error.value)
+    assert "'first-definition' and 'second-definition'" in message
+    assert f"family {family!r}" in message
+
+
+def test_load_parser_catalog_disabled_definition_of_a_configured_family_is_kept(
     tmp_path: Path,
 ) -> None:
     config_path = _write_config(
@@ -496,20 +675,47 @@ def test_registry_rejects_multiple_enabled_profiles_for_same_parser(
         """
         version: 1
         parsers:
-          fast:
+          active-pdf:
             parser: pdf
-            settings:
-              profile: fast
-          quality:
+            engines:
+              - backend: liteparse
+          standby-pdf:
             parser: pdf
-            settings:
-              profile: quality
+            enabled: false
+            engines:
+              - backend: docling
         """,
     )
+
     catalog = load_parser_catalog(config_path)
+
+    assert catalog.names(enabled_only=True) == ["active-pdf"]
+    assert catalog.pdf_definition_for("docling") == "standby-pdf"
+
+
+def test_build_harbor_parser_two_enabled_definitions_made_in_code_are_rejected(
+    tmp_path: Path,
+) -> None:
+    catalog = ParserCatalog(
+        {
+            "fast": ParserDefinition(name="fast", parser="pdf", settings={"profile": "fast"}),
+            "quality": ParserDefinition(
+                name="quality", parser="pdf", settings={"profile": "quality"}
+            ),
+        },
+        source_path=tmp_path / "parsers.yaml",
+        version=1,
+    )
 
     with pytest.raises(ParserConfigurationError, match="both configure family"):
         catalog.build_harbor_parser()
+
+
+@pytest.mark.parametrize("parser", supported_parser_names())
+def test_parser_family_is_the_family_a_definition_builds(parser: str) -> None:
+    built = ParserDefinition(name="custom", parser=parser).build()
+
+    assert parser_family(parser) == built.parser_name
 
 
 _FORMAT_PARSER_SAMPLE_FILES = {

@@ -16,7 +16,9 @@ from harborrag_runtime.config.parsers.providers import (
     PDF_BACKEND_PYTHON_ONLY_FIELDS,
     PDF_BACKEND_SECRET_FIELDS,
     PdfBackendSpec,
+    check_parser_settings,
     parser_factory,
+    parser_family,
     parser_setting_names,
     pdf_backend_spec,
     supported_parser_names,
@@ -34,11 +36,39 @@ _ENGINE_KEYS = frozenset({"backend", "environment", "secrets", "settings"})
 def parse_parser_definitions(
     raw_parsers: Mapping[str, Any],
 ) -> dict[str, ParserDefinition]:
-    """Parse all named parser definitions from the top-level mapping."""
-    return {
+    """Parse all named parser definitions from the top-level mapping.
+
+    Args:
+        raw_parsers: The ``parsers`` mapping of a catalog file, by definition name.
+
+    Returns:
+        The definitions by name, in file order.
+
+    Raises:
+        ParserConfigurationError: A definition is invalid, or two enabled
+            definitions configure the same parser family.
+    """
+    definitions = {
         _validate_name(name): _parse_definition(name, raw_definition)
         for name, raw_definition in raw_parsers.items()
     }
+    _reject_family_conflicts(definitions)
+    return definitions
+
+
+def _reject_family_conflicts(definitions: Mapping[str, ParserDefinition]) -> None:
+    """Reject two enabled definitions that configure the same parser family."""
+    first_enabled: dict[str, str] = {}
+    for name, definition in definitions.items():
+        if not definition.enabled:
+            continue
+        family = parser_family(definition.parser)
+        earlier = first_enabled.setdefault(family, name)
+        if earlier != name:
+            raise ParserConfigurationError(
+                f"Enabled parser definitions {earlier!r} and {name!r} "
+                f"both configure family {family!r}"
+            )
 
 
 def _validate_name(name: str) -> str:
@@ -114,12 +144,18 @@ def _validate_parser_settings(
     parser: str,
     settings: dict[str, Any],
 ) -> None:
-    """Reject settings unsupported by the selected parser constructor."""
+    """Reject settings the selected parser does not know or whose values it refuses."""
     unknown = sorted(set(settings) - parser_setting_names(parser))
     if unknown:
         raise ParserConfigurationError(
             f"Parser {name!r} has unknown {parser} setting(s): {', '.join(unknown)}"
         )
+    try:
+        check_parser_settings(parser, settings)
+    except (TypeError, ValueError) as error:
+        raise ParserConfigurationError(
+            f"Parser {name!r} has an invalid {parser} setting: {error}"
+        ) from error
 
 
 def _parse_pdf_backends(

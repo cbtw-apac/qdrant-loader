@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import sys
 from types import SimpleNamespace
 
@@ -91,10 +92,13 @@ class _TesseractError(RuntimeError):
 
 
 def test_pytesseract_treats_empty_page_as_empty_success(monkeypatch) -> None:
-    """Tesseract exits non-zero with an "Empty page!!" message when a page has
-    no detectable text -- that used to be indistinguishable from a genuine
-    failure and rewrapped as a `ParseError` instead of the empty-success path
-    every other OCR engine (and this one, for a `None`/empty return) takes."""
+    """Treat Tesseract's "Empty page!!" exit as a successful empty parse.
+
+    Tesseract exits non-zero with that message when a page has no detectable
+    text. That used to be indistinguishable from a genuine failure and was
+    rewrapped as a `ParseError` instead of the empty-success path every other
+    OCR engine (and this one, for a `None`/empty return) takes.
+    """
 
     def _raise_empty_page(*_args: object, **_kwargs: object) -> str:
         raise _TesseractError(1, "Empty page!!\nWARNING: Invalid resolution 0 dpi.\n")
@@ -114,8 +118,10 @@ def test_pytesseract_treats_empty_page_as_empty_success(monkeypatch) -> None:
 
 
 def test_pytesseract_other_tesseract_errors_still_raise(monkeypatch) -> None:
-    """A genuine Tesseract failure (not the "no text found" signal) must keep
-    surfacing as a typed `ParseError`, not be swallowed as empty success."""
+    """Keep a genuine Tesseract failure surfacing as a typed `ParseError`.
+
+    Only the "no text found" signal is an empty success.
+    """
 
     def _raise_real_failure(*_args: object, **_kwargs: object) -> str:
         raise _TesseractError(1, "Error opening data file eng.traineddata")
@@ -135,10 +141,13 @@ def test_pytesseract_other_tesseract_errors_still_raise(monkeypatch) -> None:
 def test_image_parser_raises_typed_error_instead_of_crashing_on_decompression_bomb(
     monkeypatch,
 ) -> None:
-    """`Image.open()` runs its own pixel-count guard against Pillow's global
+    """Report Pillow's decompression-bomb refusal as a typed `ParseError`.
+
+    `Image.open()` runs its own pixel-count guard against Pillow's global
     `MAX_IMAGE_PIXELS` before our own `max_pixels` check gets a chance to run,
     raising `DecompressionBombError` (a bare `Exception`, not `OSError`). That
-    used to escape uncaught instead of surfacing as a typed `ParseError`."""
+    used to escape uncaught.
+    """
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
 
     with pytest.raises(ParseError, match="Image OCR failed"):
@@ -148,10 +157,13 @@ def test_image_parser_raises_typed_error_instead_of_crashing_on_decompression_bo
 def test_image_parser_reports_unreadable_image_with_filename_and_size_not_raw_bytesio_repr() -> (
     None
 ):
-    """Bytes Pillow cannot identify as any supported format (corrupt,
-    truncated, or not actually an image) used to surface as a raw
-    `UnidentifiedImageError: cannot identify image file <_io.BytesIO object
-    at 0x...>` -- unreadable on its own, with no clue which file failed."""
+    """Name the file and its size when Pillow cannot identify the image.
+
+    Bytes Pillow cannot identify as any supported format (corrupt, truncated,
+    or not actually an image) used to surface as a raw `UnidentifiedImageError:
+    cannot identify image file <_io.BytesIO object at 0x...>`, unreadable on
+    its own, with no clue which file failed.
+    """
     garbage = b"not an image, just plain bytes"
 
     with pytest.raises(ParseError) as exc_info:
@@ -164,11 +176,12 @@ def test_image_parser_reports_unreadable_image_with_filename_and_size_not_raw_by
 
 
 def test_image_parser_rejects_image_over_configured_max_pixels_with_clear_error() -> None:
-    """A real, well-formed image whose pixel count exceeds the configured
-    `max_pixels` (but stays under Pillow's own default decompression-bomb
-    threshold, so `Image.open()` decodes the header fine) must be rejected
-    with a message naming the offending dimensions and the limit -- not
-    left to fail later as a bare `UnidentifiedImageError`."""
+    """Reject an image over the configured `max_pixels`, naming size and limit.
+
+    The image is real and well formed, and it stays under Pillow's own default
+    decompression-bomb threshold, so `Image.open()` decodes the header fine.
+    It must not be left to fail later as a bare `UnidentifiedImageError`.
+    """
     width, height = 1000, 1001
     buffer = io.BytesIO()
     Image.new("L", (width, height), color=128).save(buffer, format="PNG")
@@ -184,10 +197,13 @@ def test_image_parser_rejects_image_over_configured_max_pixels_with_clear_error(
 
 
 def test_image_past_pillows_bomb_ceiling_reports_the_configured_max_pixels(monkeypatch) -> None:
-    """Above twice Pillow's `MAX_IMAGE_PIXELS` (~179M pixels by default),
+    """Name the configured `max_pixels` when it sits below Pillow's ceiling.
+
+    Above twice Pillow's `MAX_IMAGE_PIXELS` (~179M pixels by default),
     `Image.open()` raises before our own dimension check runs. When the
     configured `max_pixels` sits below that ceiling the image certainly
-    breaks it, so the error must name the configured limit, not Pillow's."""
+    breaks it, so the error must name the configured limit, not Pillow's.
+    """
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)  # ceiling: 20 pixels
 
     with pytest.raises(MaxPixelsExceededError, match=r"exceeds max_pixels 15\b") as exc_info:
@@ -202,9 +218,12 @@ def test_image_past_pillows_bomb_ceiling_reports_the_configured_max_pixels(monke
 def test_image_past_pillows_bomb_ceiling_names_the_ceiling_capping_max_pixels(
     monkeypatch,
 ) -> None:
-    """A configured `max_pixels` above Pillow's ceiling cannot be honored, and
+    """Say Pillow's ceiling rejected the image when `max_pixels` is above it.
+
+    A configured `max_pixels` above Pillow's ceiling cannot be honored, and
     the image may still be within it, so the error must not claim a
-    `max_pixels` breach but must say the ceiling is what rejected it."""
+    `max_pixels` breach.
+    """
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)  # ceiling: 20 pixels
 
     with pytest.raises(ParseError) as exc_info:
@@ -277,3 +296,52 @@ def test_liteparse_image_engine_strips_spurious_code_fences(monkeypatch) -> None
     result = parser.parse(ParseInput(content=_png_bytes(), filename="scan.png"))
 
     assert result.content == "scanned prose"
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("timeout", "abc"),
+        ("timeout", -1),
+        ("timeout", True),
+        ("lang", 5),
+        ("config", 5),
+        ("max_pixels", 0),
+        ("max_pixels", 2.5),
+    ],
+)
+def test_image_parser_option_value_outside_permitted_set_is_rejected(
+    option: str,
+    value: object,
+) -> None:
+    expected = f"Image {option} must be .*got {re.escape(repr(value))}"
+
+    with pytest.raises(ValueError, match=expected):
+        ImageParser(**{option: value})
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("timeout", None),
+        ("timeout", 0),
+        ("timeout", 2.5),
+        ("lang", None),
+        ("lang", "en"),
+        ("config", "--psm 6"),
+        ("config", None),
+        ("max_pixels", None),
+        ("timeout", 10**400),
+    ],
+)
+def test_image_parser_permitted_option_value_is_kept(option: str, value: object) -> None:
+    assert getattr(ImageParser(**{option: value}), option) == value
+
+
+def test_image_parser_rejected_ocr_server_url_is_not_shown() -> None:
+    wrong_shape = ["https://reader:synthetic-token@ocr.example.test/ocr"]
+
+    with pytest.raises(ValueError, match="Image ocr_server_url must be .*got list") as error:
+        ImageParser(ocr_server_url=wrong_shape)
+
+    assert "synthetic-token" not in str(error.value)

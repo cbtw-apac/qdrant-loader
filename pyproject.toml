@@ -337,7 +337,7 @@ override-dependencies = [
     "filelock>=4.2.1",
     "dnspython==2.9.2",
     "opentelemetry-api==1.45.2",
-    "soupsieve==4.0.0",
+    "soupsieve==4.1.1",
     "mail-parser==4.6.3",
 ]
 

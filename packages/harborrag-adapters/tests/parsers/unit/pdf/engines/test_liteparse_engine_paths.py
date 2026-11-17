@@ -118,8 +118,8 @@ def test_bytes_input_mode_passes_raw_bytes() -> None:
 
 
 def test_unknown_input_mode_is_rejected() -> None:
-    with pytest.raises(ParseError, match="input_mode must be `path` or `bytes`"):
-        _engine(_RecordingParser(), input_mode="stream").parse_input(_PDF)
+    with pytest.raises(ValueError, match="LiteParse input_mode must be one of bytes, path"):
+        _engine(_RecordingParser(), input_mode="stream")
 
 
 def test_result_without_text_falls_back_to_whole_result() -> None:

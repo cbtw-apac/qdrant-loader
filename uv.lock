@@ -29,7 +29,7 @@ overrides = [
     { name = "opentelemetry-api", specifier = "==1.45.2" },
     { name = "pillow", specifier = ">=13.0.0" },
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
-    { name = "soupsieve", specifier = "==4.0.0" },
+    { name = "soupsieve", specifier = "==4.1.1" },
 ]
 
 [[package]]
