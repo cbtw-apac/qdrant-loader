@@ -199,7 +199,12 @@ class ConfluenceBlockHandlers(ConfluenceIncludeTableHandlers, abc.ABC):
                     predicate="links_to" if node.kind == "link" else "has_attachment",
                     target_id=target,
                     target_type="document" if node.kind == "link" else "attachment",
-                    metadata={"source_block_id": node.source_id},
+                    metadata={
+                        "source_block_id": node.source_id,
+                        # A media node names its file by UUID; the transform matches it to the
+                        # listed attachment's fileId before dropping the body copy.
+                        **({"media_id": target.casefold()} if node.kind == "media" else {}),
+                    },
                 )
             )
 
