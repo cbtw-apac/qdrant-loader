@@ -9,6 +9,7 @@ from local_test_helpers import config, write_file
 
 from harborrag_adapters.connectors.exceptions import DocumentProcessingError
 from harborrag_adapters.connectors.local.filesystem import LocalFileSystem
+from harborrag_adapters.connectors.local.filesystem_paths import stat_datetime
 
 pytestmark = [pytest.mark.unit, pytest.mark.whitebox]
 
@@ -66,6 +67,18 @@ def test_checksum_mode_sha256_refuses_a_path_outside_source_scope(
     files = LocalFileSystem(config(tmp_path, checksum_mode="sha256"))
     with pytest.raises(DocumentProcessingError, match="outside configured source scope"):
         files.checksum(outside)
+
+
+def test_source_record_includes_created_and_updated_timestamps(tmp_path: Path):
+    path = write_file(tmp_path / "a.txt", "hello")
+    files = LocalFileSystem(config(tmp_path))
+
+    record = files.source_record(path, is_symlink=False)
+    stat = path.stat()
+    created = getattr(stat, "st_birthtime", stat.st_ctime)
+
+    assert record.metadata["created_at"] == stat_datetime(created)
+    assert record.metadata["updated_at"] == stat_datetime(stat.st_mtime)
 
 
 def test_within_source_scope_for_single_file_source(tmp_path: Path):
