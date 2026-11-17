@@ -6,7 +6,7 @@ Revises: 0035
 Phase: expand
 Reversible: yes; the downgrade drops mcp_api_keys and every stored key
 Touches: mcp_api_keys (new)
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on mcp_api_keys to drop it
 Deploy: before the application release
 """
 

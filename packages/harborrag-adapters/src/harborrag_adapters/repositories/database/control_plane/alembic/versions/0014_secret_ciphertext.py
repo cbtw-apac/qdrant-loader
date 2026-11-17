@@ -6,7 +6,8 @@ Revises: 0013
 Phase: expand
 Reversible: yes; the downgrade drops secrets.ciphertext and the values stored in it
 Touches: secrets; nullable column, no backfill
-Locks: brief lock on secrets to add or drop the column
+Locks: ACCESS EXCLUSIVE lock on secrets, taken by the ALTER and held until the migration run
+       commits
 Deploy: before the application release
 """
 

@@ -6,7 +6,7 @@ Revises: 0010
 Phase: expand
 Reversible: yes; the downgrade drops memories and its rows
 Touches: memories (new)
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on memories to drop it
 Deploy: before the application release
 """
 

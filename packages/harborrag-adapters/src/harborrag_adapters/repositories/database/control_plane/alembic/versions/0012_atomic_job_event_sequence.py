@@ -6,7 +6,8 @@ Revises: 0011
 Phase: expand and data in one revision
 Reversible: yes; the downgrade drops jobs.event_sequence
 Touches: jobs; event_sequence set on every row from job_events
-Locks: brief lock on jobs to add the column, then row locks on every job until commit
+Locks: ACCESS EXCLUSIVE lock on jobs from the ADD COLUMN until the migration run commits, so
+       reads and writes of jobs wait for the whole backfill
 Deploy: before the application release
 """
 

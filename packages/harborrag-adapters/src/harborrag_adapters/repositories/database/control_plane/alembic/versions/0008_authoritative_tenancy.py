@@ -4,10 +4,13 @@ Revision ID: 0008
 Revises: 0007
 
 Phase: expand, data and contract in one revision
-Reversible: partly; the downgrade restores the old uniqueness rules and keeps tenant_id
+Reversible: partly; the downgrade restores the old uniqueness rules and keeps tenant_id. It
+            fails while two tenants share a non-null idempotency key or a document identity, so
+            resolve those collisions first
 Touches: source_scopes, documents, ingestion_tasks; tenant_id backfilled on every row
-Locks: one transaction updates every row of the three tables, then locks each table to set NOT
-       NULL and rebuild its indexes and unique constraint
+Locks: on a legacy database, an ACCESS EXCLUSIVE lock on each of the three tables from its first
+       ALTER until the migration run commits, covering the backfill of every row, the NOT NULL
+       change and the index and constraint rebuilds. SQLite copies each table.
 Deploy: before the application release
 
 This migration is intentionally schema-aware. New databases receive these

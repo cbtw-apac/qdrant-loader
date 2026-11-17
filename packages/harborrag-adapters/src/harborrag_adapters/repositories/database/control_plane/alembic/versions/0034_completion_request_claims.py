@@ -6,7 +6,8 @@ Revises: 0033
 Phase: expand
 Reversible: yes; the downgrade drops completion_requests and its rows
 Touches: completion_requests (new)
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on completion_requests to
+       drop it
 Deploy: before the application release
 """
 

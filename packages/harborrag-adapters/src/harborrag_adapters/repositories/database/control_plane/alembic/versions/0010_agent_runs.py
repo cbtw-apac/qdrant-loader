@@ -7,8 +7,9 @@ Phase: expand, with a data repair on legacy databases
 Reversible: partly; the downgrade drops agent_runs and keeps the conversation repair
 Touches: agent_runs (new); conversation_sessions and conversation_memory on legacy databases
          only
-Locks: none on a current database; a legacy database rebuilds conversation_memory under a table
-       lock
+Locks: creating agent_runs takes a SHARE ROW EXCLUSIVE lock on conversation_sessions for its
+       foreign key, so session writes wait until the migration run commits; a legacy database
+       also rebuilds conversation_memory under an exclusive lock
 Deploy: before the application release
 
 Some development databases were stamped at revision 0009 by an earlier

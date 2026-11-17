@@ -8,8 +8,10 @@ Reversible: partly; the downgrade drops the columns and the constraint and keeps
             seq values
 Touches: conversation_sessions (four columns, every row updated); conversation_messages
          (duplicate seq values renumbered, unique constraint added)
-Locks: updates every session and each duplicated message in one transaction, then locks
-       conversation_messages while the unique constraint builds
+Locks: ACCESS EXCLUSIVE lock on conversation_sessions from the first ADD COLUMN until the
+       migration run commits, so session reads and writes wait through the session and message
+       updates; conversation_messages is then locked exclusively while the unique constraint
+       builds. SQLite copies conversation_messages.
 Deploy: before the application release
 """
 

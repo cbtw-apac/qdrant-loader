@@ -12,7 +12,7 @@ Revises: 0028
 Phase: expand
 Reversible: yes; the downgrade drops model_usage and its rows
 Touches: model_usage (new)
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on model_usage to drop it
 Deploy: before the application release
 """
 

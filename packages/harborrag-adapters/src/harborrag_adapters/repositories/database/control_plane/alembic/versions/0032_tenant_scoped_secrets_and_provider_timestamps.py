@@ -24,9 +24,12 @@ Revises: 0031
 
 Phase: expand, data and contract in one revision
 Reversible: yes; the downgrade drops secrets.tenant_id and both updated_at columns
-Touches: secrets, providers, routing_rules; every row backfilled, reading sources
-Locks: one UPDATE over every row of the three tables, a lock on each to set NOT NULL, and writes
-       to secrets wait while its index builds
+Touches: secrets, providers, routing_rules; every row backfilled, with one UPDATE per uniquely
+         owned secret reference, reading sources
+Locks: ACCESS EXCLUSIVE lock on secrets, providers and routing_rules, each from its ADD COLUMN
+       until the migration run commits, covering the backfills (one UPDATE per uniquely owned
+       secret reference), the NOT NULL changes and the secrets index build. SQLite copies each
+       table.
 Deploy: before the application release
 """
 

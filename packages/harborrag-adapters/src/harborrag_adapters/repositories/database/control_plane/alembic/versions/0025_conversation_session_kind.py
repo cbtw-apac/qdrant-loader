@@ -13,7 +13,8 @@ Revises: 0024
 Phase: expand
 Reversible: yes; the downgrade drops conversation_sessions.kind
 Touches: conversation_sessions; existing rows get kind chat
-Locks: brief lock on conversation_sessions to add or drop the column
+Locks: ACCESS EXCLUSIVE lock on conversation_sessions, taken by the ALTER and held until the
+       migration run commits
 Deploy: before the application release
 """
 

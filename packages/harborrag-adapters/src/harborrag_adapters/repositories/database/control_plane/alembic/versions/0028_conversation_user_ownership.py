@@ -19,8 +19,9 @@ Revises: 0027
 Phase: expand, data and contract in one revision
 Reversible: yes; the downgrade drops user_id, title and updated_at with their values
 Touches: conversation_sessions, conversation_messages; user_id backfilled on every row
-Locks: one UPDATE over every row of both tables, a lock on each to set NOT NULL, and writes wait
-       while the indexes build
+Locks: ACCESS EXCLUSIVE lock on conversation_sessions, then on conversation_messages, each from
+       its first ALTER until the migration run commits, covering the backfill of every row, the
+       NOT NULL changes and the index builds. SQLite copies both tables.
 Deploy: before the application release
 """
 

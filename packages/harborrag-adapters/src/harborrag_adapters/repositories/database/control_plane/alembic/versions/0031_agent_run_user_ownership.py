@@ -20,8 +20,9 @@ Revises: 0030
 Phase: expand, data and contract in one revision
 Reversible: yes; the downgrade drops agent_runs.user_id and restores the tenant index
 Touches: agent_runs; user_id backfilled from principal_id on every row
-Locks: one UPDATE over every row, a lock on agent_runs to set NOT NULL, and writes wait while
-       the index builds
+Locks: ACCESS EXCLUSIVE lock on agent_runs from the index drop until the migration run commits,
+       covering the backfill of every row, the NOT NULL change and the index build. SQLite
+       copies agent_runs.
 Deploy: before the application release
 """
 

@@ -9,7 +9,8 @@ Revises: None
 Phase: expand
 Reversible: yes; the downgrade drops every baseline table and the rows in them
 Touches: every baseline control-plane and ingestion table, created empty
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on every baseline table to
+       drop it, waits for open queries and blocks new ones until it commits
 Deploy: before the application release
 """
 

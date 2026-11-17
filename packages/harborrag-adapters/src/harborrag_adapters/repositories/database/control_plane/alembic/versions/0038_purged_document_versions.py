@@ -6,7 +6,8 @@ Revises: 0037
 Phase: expand; widens the allowed statuses
 Reversible: partly; the downgrade turns PURGING and PURGED versions into RETIRED
 Touches: document_versions; status check constraint replaced
-Locks: lock on document_versions while the new check validates every row
+Locks: ACCESS EXCLUSIVE lock on document_versions from the constraint swap until the migration
+       run commits; the new check validates every row under it. SQLite copies document_versions.
 Deploy: before the application release
 """
 

@@ -6,7 +6,8 @@ Revises: 0042
 Phase: expand
 Reversible: yes; the downgrade drops projects.version
 Touches: projects; existing rows get version 1
-Locks: brief lock on projects to add or drop the column
+Locks: ACCESS EXCLUSIVE lock on projects, taken by the ALTER and held until the migration run
+       commits. SQLite copies projects.
 Deploy: before the application release
 """
 

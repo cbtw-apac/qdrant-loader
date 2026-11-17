@@ -10,7 +10,8 @@ Revises: 0015
 Phase: expand
 Reversible: yes; the downgrade drops the table and any queued effects
 Touches: pending_control_plane_effects (new)
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on
+       pending_control_plane_effects to drop it
 Deploy: before the application release
 """
 

@@ -6,7 +6,8 @@ Revises: 0036
 Phase: expand
 Reversible: yes; the downgrade drops the index
 Touches: task_document_results; index only
-Locks: writes to task_document_results wait while the index builds
+Locks: SHARE lock on task_document_results from the index build until the migration run commits;
+       writes wait and reads continue
 Deploy: before the application release
 """
 

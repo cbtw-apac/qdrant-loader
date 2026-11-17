@@ -7,8 +7,9 @@ Phase: contract
 Reversible: yes; the downgrade puts the ``DEFAULT`` server default back
 Touches: projects, sources, secrets, jobs, activity, providers, workspace_settings, members,
          graph_conflicts; stored rows keep their tenant_id
-Locks: brief lock on each table to drop or restore the column default; lock_timeout 5s on
-       Postgres in both directions. SQLite rebuilds each table.
+Locks: ACCESS EXCLUSIVE lock on each of the nine tables, taken by the ALTER and held until the
+       migration run commits; lock_timeout 5s on Postgres in both directions. SQLite copies each
+       table.
 Deploy: before the application release
 """
 

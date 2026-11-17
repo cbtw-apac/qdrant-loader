@@ -6,7 +6,8 @@ Revises: 0034
 Phase: expand; widens the allowed statuses
 Reversible: partly; the downgrade turns PAUSED tasks into RUNNING
 Touches: ingestion_tasks; status check constraint replaced
-Locks: lock on ingestion_tasks while the new check validates every row
+Locks: ACCESS EXCLUSIVE lock on ingestion_tasks from the constraint swap until the migration run
+       commits; the new check validates every row under it. SQLite copies ingestion_tasks.
 Deploy: before the application release
 """
 

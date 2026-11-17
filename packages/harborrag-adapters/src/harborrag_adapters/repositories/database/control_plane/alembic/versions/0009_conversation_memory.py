@@ -6,7 +6,7 @@ Revises: 0008
 Phase: expand
 Reversible: yes; the downgrade drops both tables and their rows
 Touches: conversation_sessions, conversation_memory (new)
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on both tables to drop them
 Deploy: before the application release
 """
 

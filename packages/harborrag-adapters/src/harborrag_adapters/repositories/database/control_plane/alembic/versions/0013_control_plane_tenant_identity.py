@@ -7,8 +7,9 @@ Phase: expand
 Reversible: yes; the downgrade drops the columns and their indexes
 Touches: projects, sources, jobs, activity, providers, workspace_settings, members; existing
          rows get tenant_id DEFAULT
-Locks: brief lock on each table to add the column; writes to each table wait while its index
-       builds
+Locks: ACCESS EXCLUSIVE lock on each of the seven tables from its ADD COLUMN until the migration
+       run commits, so reads and writes wait through the index builds and any later revision in
+       the same run
 Deploy: before the application release
 """
 

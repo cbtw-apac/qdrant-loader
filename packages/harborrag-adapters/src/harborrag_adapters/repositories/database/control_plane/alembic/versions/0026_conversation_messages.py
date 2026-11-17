@@ -15,12 +15,15 @@ Revision ID: 0026
 Revises: 0025
 
 Phase: expand and data in one revision
-Reversible: partly; the downgrade re-pairs user and assistant messages and drops the attributes
-            a pair cannot hold
+Reversible: partly; the downgrade keeps only a user message directly answered by an assistant
+            message. Unanswered or repeated user messages, messages of other roles and the
+            attributes a pair cannot hold are lost
 Touches: conversation_messages (new, filled from every stored pair); conversation_memory renamed
          conversation_memory_legacy
-Locks: copies every stored pair in one transaction; brief lock on conversation_memory to rename
-       it
+Locks: creating conversation_messages takes a SHARE ROW EXCLUSIVE lock on conversation_sessions
+       for its foreign key, so session writes wait through the copy of every stored pair; the
+       rename then takes an ACCESS EXCLUSIVE lock on conversation_memory. Both are held until
+       the migration run commits.
 Deploy: before the application release
 """
 

@@ -13,7 +13,8 @@ Revises: 0029
 Phase: expand
 Reversible: yes; the downgrade drops the partial flag
 Touches: conversation_messages; existing rows read as not partial
-Locks: brief lock on conversation_messages to add or drop the column
+Locks: ACCESS EXCLUSIVE lock on conversation_messages, taken by the ALTER and held until the
+       migration run commits
 Deploy: before the application release
 """
 

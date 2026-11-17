@@ -6,7 +6,9 @@ Revises: 0038
 Phase: expand
 Reversible: yes; the downgrade drops the table and its rows
 Touches: unresolved_source_relations (new)
-Locks: none
+Locks: creating the table takes a SHARE ROW EXCLUSIVE lock on documents for its foreign key, so
+       document writes wait until the migration run commits; the downgrade takes an ACCESS
+       EXCLUSIVE lock on unresolved_source_relations to drop it
 Deploy: before the application release
 """
 

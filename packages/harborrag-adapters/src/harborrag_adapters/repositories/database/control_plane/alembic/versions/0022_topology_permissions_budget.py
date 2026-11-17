@@ -7,7 +7,9 @@ Phase: expand
 Reversible: yes; the downgrade drops the new tables with their rows and the new columns
 Touches: topology_jobs, topology_accepted, topology_resolution_snapshots (new columns with
          defaults); nine new topology tables
-Locks: brief lock on each of the three altered tables to add or drop its columns
+Locks: ACCESS EXCLUSIVE lock on each of the three altered tables, taken by the ALTER and held
+       until the migration run commits. On SQLite the downgrade copies each table, so its write
+       lock grows with table size.
 Deploy: before the application release
 """
 

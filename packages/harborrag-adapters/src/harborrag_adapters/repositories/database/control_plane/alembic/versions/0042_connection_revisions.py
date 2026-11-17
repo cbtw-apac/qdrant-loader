@@ -11,7 +11,8 @@ Revises: 0041
 Phase: expand
 Reversible: yes; the downgrade drops connection_revisions and its rows
 Touches: connection_revisions (new)
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on connection_revisions to
+       drop it
 Deploy: before the application release
 """
 

@@ -11,7 +11,8 @@ Revises: 0016
 Phase: expand, with one seeded row
 Reversible: yes; the downgrade drops singleton_leases
 Touches: singleton_leases (new), one seeded row
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on singleton_leases to drop
+       it
 Deploy: before the application release
 """
 

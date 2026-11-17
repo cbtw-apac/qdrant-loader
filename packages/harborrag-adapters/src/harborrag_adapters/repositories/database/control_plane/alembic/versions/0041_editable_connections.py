@@ -14,11 +14,13 @@ Revision ID: 0041
 Revises: 0040
 
 Phase: expand, data and contract in one revision
-Reversible: yes; the downgrade folds credentials, config and tuning back into config_json and
-            drops the new columns
+Reversible: partly; the downgrade folds credentials, config and tuning back into config_json and
+            drops the new columns, but a paused source stays active, a jira_cloud source stays
+            jira, and needs_reauth and deleting sources become error
 Touches: sources; every row rewritten
-Locks: every sources row updated in one transaction, then a lock on sources to set NOT NULL and
-       add the unique constraints
+Locks: ACCESS EXCLUSIVE lock on sources from the first ADD COLUMN until the migration run
+       commits, so reads and writes of sources wait through the rewrite of every row, the NOT
+       NULL changes and the unique constraints. SQLite copies sources.
 Deploy: before the application release
 """
 

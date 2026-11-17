@@ -9,7 +9,8 @@ Revises: 0014
 Phase: expand
 Reversible: yes; the downgrade drops task_events and ingestion_tasks.event_sequence
 Touches: ingestion_tasks (event_sequence, 0 on existing rows), task_events (new)
-Locks: brief lock on ingestion_tasks to add or drop the column
+Locks: ACCESS EXCLUSIVE lock on ingestion_tasks, taken by the ALTER and held until the migration
+       run commits
 Deploy: before the application release
 """
 

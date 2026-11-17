@@ -10,7 +10,8 @@ Revises: 0019
 Phase: expand
 Reversible: yes; the downgrade drops graph_conflicts and its rows
 Touches: graph_conflicts (new)
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on graph_conflicts to drop
+       it
 Deploy: before the application release
 """
 

@@ -13,7 +13,9 @@ Revises: 0023
 Phase: expand
 Reversible: yes; the downgrade drops the two lease columns
 Touches: agent_runs; nullable columns, no backfill
-Locks: brief lock on agent_runs to add or drop the columns
+Locks: ACCESS EXCLUSIVE lock on agent_runs, taken by the ALTER and held until the migration run
+       commits. On SQLite the downgrade copies agent_runs, so its write lock grows with table
+       size.
 Deploy: before the application release
 """
 

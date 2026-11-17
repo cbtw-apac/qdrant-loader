@@ -8,7 +8,9 @@ Reversible: yes; the downgrade drops the topology tables, their rows and
             document_versions.source_scope_id
 Touches: document_versions (source_scope_id backfilled on every row, then NOT NULL); ten new
          topology tables
-Locks: one UPDATE over every document_versions row, then a table lock to set NOT NULL
+Locks: ACCESS EXCLUSIVE lock on document_versions from the ADD COLUMN until the migration run
+       commits, so reads and writes wait through the backfill of every row and the NOT NULL
+       change. SQLite copies document_versions.
 Deploy: before the application release
 """
 

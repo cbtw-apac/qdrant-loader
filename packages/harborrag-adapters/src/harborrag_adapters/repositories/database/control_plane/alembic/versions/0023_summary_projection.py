@@ -6,7 +6,8 @@ Revises: 0022
 Phase: expand
 Reversible: yes; the downgrade drops the four tables and their rows
 Touches: summary_tenants, summary_scopes, summary_bindings, summary_cache (new)
-Locks: none
+Locks: none on upgrade; the downgrade takes an ACCESS EXCLUSIVE lock on the four tables to drop
+       them
 Deploy: before the application release
 """
 

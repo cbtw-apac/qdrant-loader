@@ -13,8 +13,9 @@ Revises: 0026
 Phase: expand and data in one revision
 Reversible: yes; the downgrade drops the new columns and indexes
 Touches: memories; user_id backfilled from principal_id on every row
-Locks: brief lock on memories to add the columns, one UPDATE over every row, and writes wait
-       while the two indexes build
+Locks: ACCESS EXCLUSIVE lock on memories from the ADD COLUMN until the migration run commits,
+       covering the UPDATE of every row and both index builds. On SQLite the downgrade copies
+       memories.
 Deploy: before the application release
 """
 
