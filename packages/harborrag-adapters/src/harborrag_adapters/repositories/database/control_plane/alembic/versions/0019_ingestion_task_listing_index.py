@@ -12,7 +12,9 @@ Phase: expand
 Reversible: yes; the downgrade drops the index
 Touches: ingestion_tasks; index only
 Locks: SHARE lock on ingestion_tasks from the index build until the migration run commits;
-       writes wait and reads continue
+       writes wait, and reads continue unless an earlier revision in the same run already holds
+       an exclusive lock on ingestion_tasks. The downgrade takes an ACCESS EXCLUSIVE lock on
+       ingestion_tasks to drop the index, so reads wait too
 Deploy: before the application release
 """
 

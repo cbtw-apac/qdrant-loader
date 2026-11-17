@@ -23,8 +23,10 @@ Touches: conversation_messages (new, filled from every stored pair); conversatio
 Locks: creating conversation_messages takes a SHARE ROW EXCLUSIVE lock on conversation_sessions
        for its foreign key, so session writes wait through the copy of every stored pair; the
        rename then takes an ACCESS EXCLUSIVE lock on conversation_memory. Both are held until
-       the migration run commits.
-Deploy: before the application release
+       the migration run commits. The copy reads conversation_memory once and does not lock it
+Deploy: before the application release, with every writer to conversation_memory stopped. A pair
+        written during the copy stays only in conversation_memory_legacy and is missing from
+        conversation_messages
 """
 
 from __future__ import annotations

@@ -11,7 +11,8 @@ Revises: 0039
 Phase: contract; tightens the key format checks and widens the environment check
 Reversible: yes; the downgrade fails while a staging key exists
 Touches: mcp_api_keys; four check constraints replaced. The upgrade fails while a stored key_id
-         or secret_hash is not lowercase hex, so fix or revoke such keys first
+         or secret_hash is not lowercase hex, so correct or delete such rows first; revoking a
+         key keeps its row
 Locks: ACCESS EXCLUSIVE lock on mcp_api_keys from the constraint swap until the migration run
        commits; the new check validates every row under it. SQLite copies mcp_api_keys.
 Deploy: before the application release

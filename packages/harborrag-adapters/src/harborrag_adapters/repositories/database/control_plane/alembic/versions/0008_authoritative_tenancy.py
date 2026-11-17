@@ -8,9 +8,10 @@ Reversible: partly; the downgrade restores the old uniqueness rules and keeps te
             fails while two tenants share a non-null idempotency key or a document identity, so
             resolve those collisions first
 Touches: source_scopes, documents, ingestion_tasks; tenant_id backfilled on every row
-Locks: on a legacy database, an ACCESS EXCLUSIVE lock on each of the three tables from its first
-       ALTER until the migration run commits, covering the backfill of every row, the NOT NULL
-       change and the index and constraint rebuilds. SQLite copies each table.
+Locks: the backfill updates every row of the three tables on any database, so conflicting
+       updates and deletes wait on those row locks until the migration run commits. A legacy
+       database also takes an ACCESS EXCLUSIVE lock on each table from its first ALTER, covering
+       the NOT NULL change and the index and constraint rebuilds. SQLite copies each table.
 Deploy: before the application release
 
 This migration is intentionally schema-aware. New databases receive these
