@@ -335,6 +335,10 @@ override-dependencies = [
     "pyyaml>=6.0.3,<7",
     # litellm 1.106 caps filelock<4; 4.2.1 fixes CVE-2026-112907/112913/112940.
     "filelock>=4.2.1",
+    "dnspython==2.9.2",
+    "opentelemetry-api==1.45.2",
+    "soupsieve==4.0.0",
+    "mail-parser==4.6.3",
 ]
 
 [tool.uv.workspace]

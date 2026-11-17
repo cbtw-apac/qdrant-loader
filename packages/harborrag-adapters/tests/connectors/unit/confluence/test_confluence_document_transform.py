@@ -221,3 +221,73 @@ def test_merge_relations_prefers_the_first_group_on_key_collision():
     merged = ConfluenceDocumentTransform._merge_relations([canonical_relation], [stale_relation])
 
     assert merged == [canonical_relation]
+
+
+_FILE_UUID = "e49188de-7713-4f2f-90f6-189d20aa15c9"
+
+
+def _body_media(media_id: str = _FILE_UUID) -> DocumentRelation:
+    return DocumentRelation(
+        predicate="has_attachment",
+        target_id=media_id,
+        target_type="attachment",
+        metadata={"media_id": media_id},
+    )
+
+
+def _listed(file_id: str = _FILE_UUID) -> DocumentRelation:
+    return DocumentRelation(
+        predicate="has_attachment",
+        target_id="confluence://ENG/1/attachments/att44269579",
+        target_type="document",
+        metadata={"file_id": file_id},
+    )
+
+
+def test_drop_superseded_attachment_refs_drops_only_the_reference_whose_file_is_listed():
+    other_file = _body_media("11111111-2222-3333-4444-555555555555")
+    link = DocumentRelation(
+        predicate="links_to",
+        target_id="confluence://ENG/2",
+        target_type="document",
+    )
+
+    kept = ConfluenceDocumentTransform._drop_superseded_attachment_refs(
+        [_body_media(), other_file, link],
+        [_listed()],
+    )
+
+    assert kept == [other_file, link]
+
+
+def test_drop_superseded_attachment_refs_matches_file_ids_case_insensitively():
+    kept = ConfluenceDocumentTransform._drop_superseded_attachment_refs(
+        [_body_media(_FILE_UUID.upper())],
+        [_listed(_FILE_UUID)],
+    )
+
+    assert kept == []
+
+
+def test_drop_superseded_attachment_refs_keeps_references_when_no_file_id_is_listed():
+    body_media = _body_media()
+    listed_without_file_id = DocumentRelation(
+        predicate="has_attachment",
+        target_id="confluence://ENG/1/attachments/att44269579",
+        target_type="document",
+    )
+
+    kept = ConfluenceDocumentTransform._drop_superseded_attachment_refs(
+        [body_media],
+        [listed_without_file_id],
+    )
+
+    assert kept == [body_media]
+
+
+def test_drop_superseded_attachment_refs_keeps_references_when_no_list_was_supplied():
+    body_media = _body_media()
+
+    kept = ConfluenceDocumentTransform._drop_superseded_attachment_refs([body_media], [])
+
+    assert kept == [body_media]
