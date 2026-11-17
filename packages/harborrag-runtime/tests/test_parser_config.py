@@ -294,6 +294,18 @@ def test_missing_backend_environment_reference_fails_at_build(tmp_path: Path) ->
               broken:
                 parser: pdf
                 engines:
+                  - backend: ""
+            """,
+            "parser 'broken' engine 0 must define a non-empty backend; "
+            "expected one of: docling, liteparse, mineru, paddleocr, pymupdf",
+        ),
+        (
+            """
+            version: 1
+            parsers:
+              broken:
+                parser: pdf
+                engines:
                   - backend: pymupdf
                     settings:
                       unknown: true
@@ -401,6 +413,54 @@ def test_load_parser_catalog_valid_liteparse_num_workers_is_kept(
     catalog = load_parser_catalog(_liteparse_num_workers_config(tmp_path, value))
 
     assert catalog.build("custom-pdf").backends[0].options.num_workers == expected
+
+
+@pytest.mark.parametrize(
+    ("backend", "settings", "unsupported", "supported"),
+    [
+        (
+            "docling",
+            "{do_ocr: true, num_workers: 3, output_format: markdown}",
+            ("num_workers", "output_format"),
+            "do_ocr",
+        ),
+        (
+            "liteparse",
+            "{output_format: markdown, do_ocr: true, force_full_page_ocr: true}",
+            ("do_ocr", "force_full_page_ocr"),
+            "output_format",
+        ),
+    ],
+    ids=["docling-given-liteparse-settings", "liteparse-given-docling-settings"],
+)
+def test_load_parser_catalog_settings_of_another_pdf_backend_are_rejected(
+    tmp_path: Path,
+    backend: str,
+    settings: str,
+    unsupported: tuple[str, ...],
+    supported: str,
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        f"""
+        version: 1
+        parsers:
+          custom-pdf:
+            parser: pdf
+            engines:
+              - backend: {backend}
+                settings: {settings}
+        """,
+    )
+
+    with pytest.raises(ParserConfigurationError) as error:
+        load_parser_catalog(config_path)
+
+    message = str(error.value)
+    assert "parser 'custom-pdf' engine 0" in message
+    assert backend in message
+    assert [option for option in unsupported if option not in message] == []
+    assert supported not in message
 
 
 def test_parser_definition_repr_hides_settings() -> None:

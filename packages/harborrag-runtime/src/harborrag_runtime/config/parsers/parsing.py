@@ -169,12 +169,14 @@ def _parse_pdf_backend(
     )
 
     raw_backend = engine.get("backend")
+    supported = ", ".join(supported_pdf_backend_names())
     if not isinstance(raw_backend, str) or not raw_backend.strip():
-        raise ParserConfigurationError(f"{label} must define a non-empty backend")
+        raise ParserConfigurationError(
+            f"{label} must define a non-empty backend; expected one of: {supported}"
+        )
     backend = raw_backend.strip().lower()
     spec = pdf_backend_spec(backend)
     if spec is None:
-        supported = ", ".join(supported_pdf_backend_names())
         raise ParserConfigurationError(
             f"{label} uses unsupported PDF backend {raw_backend!r}; expected one of: {supported}"
         )
